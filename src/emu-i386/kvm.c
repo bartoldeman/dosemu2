@@ -116,6 +116,7 @@ int kvm_vm86(void)
   static struct kvm_regs regs;
   static struct kvm_guest_debug debug;
   static int debug_active;
+  struct kvm_vcpu_events events;
   unsigned int newflags;
   int ret, vm86_ret;
 
@@ -289,6 +290,15 @@ int kvm_vm86(void)
       break;
     }
     case KVM_EXIT_FAIL_ENTRY:
+      ret = ioctl(vcpufd, KVM_GET_VCPU_EVENTS, &events);
+      /* KVM errors out when we try to single-step STI instructions
+         we can recover as follows */
+      if (events.interrupt.shadow & KVM_X86_SHADOW_INT_STI) {
+        events.interrupt.shadow &= ~KVM_X86_SHADOW_INT_STI;
+        ioctl(vcpufd, KVM_SET_VCPU_EVENTS, &events);
+        vm86_ret = VM86_TRAP | (1 << 8);
+        break;
+      }
       fprintf(stderr,
 	      "KVM_EXIT_FAIL_ENTRY: hardware_entry_failure_reason = 0x%llx\n",
 	      (unsigned long long)run->fail_entry.hardware_entry_failure_reason);
