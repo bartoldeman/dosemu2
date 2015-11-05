@@ -51,6 +51,7 @@ static void kvm_init(void)
     .memory_size = LOWMEM_SIZE + HMASIZE,
     .userspace_addr = (uint64_t)(unsigned long)mem_base,
   };
+  struct kvm_cpuid *cpuid;
   int kvm, vmfd, ret, mmap_size;
 
   kvm = open("/dev/kvm", O_RDWR | O_CLOEXEC);
@@ -75,6 +76,22 @@ static void kvm_init(void)
   vcpufd = ioctl(vmfd, KVM_CREATE_VCPU, (unsigned long)0);
   if (vmfd == -1) {
     perror("KVM: KVM_CREATE_VCPU");
+    leavedos(99);
+  }
+
+  cpuid = malloc(sizeof(*cpuid) + 2*sizeof(cpuid->entries[0]));
+  cpuid->nent = 2;
+  // Use the same values as in emu-i386/simx86/interp.c
+  // (Pentium 133-200MHz, "GenuineIntel")
+  cpuid->entries[0] = (struct kvm_cpuid_entry) { .function = 0,
+    .eax = 1, .ebx = 0x756e6547, .ecx = 0x6c65746e, .edx = 0x49656e69 };
+  // family 5, model 2, stepping 12, fpu vme de pse tsc msr mce cx8
+  cpuid->entries[1] = (struct kvm_cpuid_entry) { .function = 1,
+    .eax = 0x052c, .ebx = 0, .ecx = 0, .edx = 0x1bf };
+  ret = ioctl(vcpufd, KVM_SET_CPUID, cpuid);
+  free(cpuid);
+  if (ret == -1) {
+    perror("KVM: KVM_SET_CPUID");
     leavedos(99);
   }
 
