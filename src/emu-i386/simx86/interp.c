@@ -298,11 +298,17 @@ static unsigned int JumpGen(unsigned int P2, int mode, int cond,
 /////////////////////////////////////////////////////////////////////////////
 
 #if !defined(SINGLESTEP)&&!defined(SINGLEBLOCK)&&defined(HOST_ARCH_X86)
-static inline unsigned int FindExecCode(unsigned int PC)
+static unsigned int FindExecCode(unsigned int PC)
 {
 	int mode = TheCPU.mode;
 	TNode *G;
 
+	if (CurrIMeta > 0) {		// open code?
+		if (debug_level('e') > 2)
+			e_printf("============ Closing open sequence at %08x\n",PC);
+		PC = CloseAndExec(PC, mode, __LINE__);
+		if (TheCPU.err) return PC;
+	}
 	/* for a sequence to be found, it must begin with
 	 * an allowable opcode. Look into table.
 	 * NOTE - this while can loop forever and stop
@@ -313,25 +319,23 @@ static inline unsigned int FindExecCode(unsigned int PC)
 	       ((InterOps[Fetch(PC)]&1)==0) && (G=FindTree(PC))) {
 		if (debug_level('e')>2)
 			e_printf("** Found compiled code at %08x\n",PC);
-		if (CurrIMeta>0) {		// open code?
-			if (debug_level('e')>2)
-				e_printf("============ Closing open sequence at %08x\n",PC);
-			PC = CloseAndExec(PC, mode, __LINE__);
-			if (TheCPU.err) return PC;
-		}
 		/* ---- this is the MAIN EXECUTE point ---- */
 		NodesExecd++;
 #ifdef PROFILE
 		TotalNodesExecd++;
 #endif
 		P0 = PC = Exec_x86(G, __LINE__);
+		if (G->seqlen == 0) {
+			error("CPU-EMU: Zero-len code node?\n");
+			break;
+		}
 		if (TheCPU.err) return PC;
 	}
 	return PC;
 }
 #endif
 
-static inline void HandleEmuSignals(void)
+static void HandleEmuSignals(void)
 {
 #ifdef PROFILE
 	if (debug_level('e')) EmuSignals++;
@@ -1630,9 +1634,6 @@ stack_return_from_vm86:
 			    }
 			    else {
 				/* virtual-8086 monitor */
-				if (mhpdbg.active && mhpdbg.TFpendig) {
-				    temp |= TF;
-				}
 				/* move TSSMASK from pop{e}flags to V{E}FLAGS */
 				eVEFLAGS = (eVEFLAGS & ~eTSSMASK) | (temp & eTSSMASK);
 				/* move 0xdd5 from pop{e}flags to regs->eflags */
@@ -1785,8 +1786,10 @@ repag0:
 				/* with TF set, we simulate REP and maybe back
 				   up IP */
 				int rc = 0;
-				(void)NewIMeta(P0, repmod, &rc);
+				NewIMeta(P0, repmod, &rc);
 				CODE_FLUSH();
+				/* don't cache intermediate nodes */
+				InvalidateNodePage(P0, PC - P0, NULL, NULL);
 				if (CONFIG_CPUSIM) FlagSync_All();
 				if (repmod & ADDR16) {
 					rCX--;

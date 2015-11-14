@@ -401,6 +401,18 @@ if(!port){                          /* icw1, ocw2, ocw3 */
      if(!clear_bit(ilevel,&pic1_isr)) {
        clear_bit(ilevel,&pic_isr);  /* the famous outb20 */
        pic_print(1,"EOI resetting bit ",ilevel, " on pic0");
+#if 1
+	/* XXX hack: to avoid timer interrupt re-entrancy,
+	 * we try to disable interrupts in a hope IRET will re-enable
+	 * them. This fixes Tetris Classic problem:
+	 * https://github.com/stsp/dosemu2/issues/99
+	 * Need to check also IMR because DPMI uses another hack
+	 * that masks the IRQs. */
+       if (ilevel == PIC_IRQ0 && isset_IF() && !(pic_imr & (1 << ilevel))) {
+         r_printf("PIC: disabling interrupts to avoid reentrancy\n");
+         clear_IF_timed();
+       }
+#endif
        }
      else
        pic_print(1,"EOI resetting bit ",ilevel, " on pic1");
@@ -554,7 +566,6 @@ void run_irqs(void)
        int local_pic_ilevel, ret;
 
        /* don't allow HW interrupts in force trace mode */
-       if (mhpdbg.active && mhpdbg.TFpendig) return;
        pic_activate();
        if (!isset_IF()) {
 		if (pic_pending())
@@ -832,18 +843,6 @@ void pic_sched(int ilevel, int interval)
     pic_print(2,"Scheduling lvl= ",ilevel,mesg);
     pic_print2(2,"pic_itime set to ",pic_itime[ilevel],"");
   }
-}
-
-void pic_sti(void)
-{
-  pic_iflag = 0;
-  pic_set_mask;
-}
-
-void pic_cli(void)
-{
-  pic_iflag = pic_irqall;
-  pic_set_mask;
 }
 
 int CAN_SLEEP(void)
