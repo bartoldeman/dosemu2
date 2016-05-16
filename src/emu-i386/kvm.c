@@ -121,7 +121,8 @@ static struct kvm_run *run;
 static int vmfd, vcpufd;
 static volatile int mprotected_kvm = 0;
 
-#define MAXSLOT 40
+// main(1)+VGA(32)+UMB(1)+EMS(4)+BIOS(1)+HMA(1)+monitor(1)+spare(9)
+#define MAXSLOT 50
 static struct kvm_userspace_memory_region maps[MAXSLOT];
 
 /* initialize KVM virtual machine monitor */
@@ -130,9 +131,6 @@ void init_kvm_monitor(void)
   int ret, i, j;
   struct kvm_regs regs;
   struct kvm_sregs sregs;
-
-  /* Map guest memory: only conventional memory + HMA for now */
-  mmap_kvm(0, 0, mem_base, LOWMEM_SIZE + HMASIZE);
 
   /* create monitor structure in memory */
   monitor = mmap(NULL, sizeof(*monitor), PROT_READ | PROT_WRITE,
