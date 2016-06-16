@@ -25,5 +25,6 @@ void init_kvm_monitor(void);
 int kvm_vm86(struct vm86_struct *info);
 void mprotect_kvm(void *addr, size_t mapsize, int protect);
 void mmap_kvm(int cap, unsigned targ, void *addr, size_t mapsize);
+void kvm_sync_vga_dirty_map(int vga_page_base);
 
 #endif

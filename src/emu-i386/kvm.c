@@ -322,6 +322,23 @@ static void set_kvm_memory_region(struct kvm_userspace_memory_region *region)
   }
 }
 
+void kvm_sync_vga_dirty_map(int vga_page_base)
+{
+  int slot, i;
+  struct kvm_dirty_log dirty_log = {0};
+  unsigned int bitmap = 0;
+
+  for (slot = 0; slot < MAXSLOT; slot++)
+    if (maps[slot].guest_phys_addr == (vga_page_base << 12)) break;
+
+  dirty_log.slot = slot;
+  dirty_log.dirty_bitmap = &bitmap;
+  ioctl(vmfd, KVM_GET_DIRTY_LOG, &dirty_log);
+  for (i = 0; i < maps[slot].memory_size >> 12; i++)
+    if (bitmap & (1 << i))
+      vga_mark_dirty((vga_page_base + i) << 12, 1);
+}
+
 static void mmap_kvm_no_overlap(int cap, unsigned targ, void *addr,
 				size_t mapsize)
 {

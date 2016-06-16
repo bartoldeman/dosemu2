@@ -275,6 +275,7 @@
 #include "mapping.h"
 #include "utilities.h"
 #include "instremu.h"
+#include "kvm.h"
 
 /* table with video mode definitions */
 #include "vgaemu_modelist.h"
@@ -1403,7 +1404,7 @@ static int vga_emu_map(unsigned mapping, unsigned first_page)
   i = 0;
   pthread_mutex_lock(&prot_mtx);
   if(mapping == VGAEMU_MAP_BANK_MODE)
-    i = alias_mapping(MAPPING_VGAEMU,
+    i = alias_mapping(MAPPING_VGAEMU|MAPPING_LOG_DIRTY,
       vmt->base_page << 12, vmt->pages << 12,
       prot, vga.mem.base + (first_page << 12));
   else /* LFB: mapped at init, just need to set protection */
@@ -2665,6 +2666,8 @@ int vgaemu_is_dirty(void)
   int i, ret = 0;
   pthread_mutex_lock(&prot_mtx);
   if (vga.mem.dirty_map) {
+    if (config.cpu_vm == CPUVM_KVM)
+      kvm_sync_vga_dirty_map(vga.mem.map[VGAEMU_MAP_BANK_MODE].base_page);
     for (i = 0; i < vga.mem.pages; i++) {
       if (vga.mem.dirty_map[i]) {
         ret = 1;
