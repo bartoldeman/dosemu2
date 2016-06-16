@@ -132,13 +132,13 @@ void init_kvm_monitor(void)
   struct kvm_sregs sregs;
 
   /* Map guest memory: only conventional memory + HMA for now */
-  mmap_kvm(0, mem_base, LOWMEM_SIZE + HMASIZE);
+  mmap_kvm(0, 0, mem_base, LOWMEM_SIZE + HMASIZE);
 
   /* create monitor structure in memory */
   monitor = mmap(NULL, sizeof(*monitor), PROT_READ | PROT_WRITE,
 		 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   /* Map guest memory: TSS */
-  mmap_kvm(LOWMEM_SIZE + HMASIZE, monitor, sizeof(*monitor));
+  mmap_kvm(0, LOWMEM_SIZE + HMASIZE, monitor, sizeof(*monitor));
 
   memset(monitor, 0, sizeof(*monitor));
   /* trap all I/O instructions with GPF */
@@ -322,7 +322,8 @@ static void set_kvm_memory_region(struct kvm_userspace_memory_region *region)
   }
 }
 
-static void mmap_kvm_no_overlap(unsigned targ, void *addr, size_t mapsize)
+static void mmap_kvm_no_overlap(int cap, unsigned targ, void *addr,
+				size_t mapsize)
 {
   struct kvm_userspace_memory_region *region;
   int slot;
@@ -340,6 +341,7 @@ static void mmap_kvm_no_overlap(unsigned targ, void *addr, size_t mapsize)
   region->guest_phys_addr = targ;
   region->userspace_addr = (uintptr_t)addr;
   region->memory_size = mapsize;
+  region->flags = (cap & MAPPING_LOG_DIRTY) ? KVM_MEM_LOG_DIRTY_PAGES : 0;
   set_kvm_memory_region(region);
 }
 
@@ -361,7 +363,8 @@ static void munmap_kvm(unsigned targ, size_t mapsize)
 	set_kvm_memory_region(region);
       }
       if (gpa + sz > targ + mapsize) {
-	mmap_kvm_no_overlap(targ + mapsize,
+	int cap = (region->flags & KVM_MEM_LOG_DIRTY_PAGES) ? MAPPING_LOG_DIRTY : 0;
+	mmap_kvm_no_overlap(cap, targ + mapsize,
 			    (void *)(region->userspace_addr +
 				     targ + mapsize - gpa),
 			    gpa + sz - (targ + mapsize));
@@ -370,7 +373,7 @@ static void munmap_kvm(unsigned targ, size_t mapsize)
   }
 }
 
-void mmap_kvm(unsigned targ, void *addr, size_t mapsize)
+void mmap_kvm(int cap, unsigned targ, void *addr, size_t mapsize)
 {
   struct kvm_userspace_memory_region *region;
   if (targ >= LOWMEM_SIZE + HMASIZE && addr != monitor) return;
@@ -382,7 +385,7 @@ void mmap_kvm(unsigned targ, void *addr, size_t mapsize)
       return;
   /* with KVM we need to manually remove/shrink existing mappings */
   munmap_kvm(targ, mapsize);
-  mmap_kvm_no_overlap(targ, addr, mapsize);
+  mmap_kvm_no_overlap(cap, targ, addr, mapsize);
 }
 
 void mprotect_kvm(void *addr, size_t mapsize, int protect)
