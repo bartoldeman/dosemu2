@@ -372,7 +372,14 @@ static void munmap_kvm(unsigned targ, size_t mapsize)
 
 void mmap_kvm(unsigned targ, void *addr, size_t mapsize)
 {
+  struct kvm_userspace_memory_region *region;
   if (targ >= LOWMEM_SIZE + HMASIZE && addr != monitor) return;
+  for (region = maps; region < &maps[MAXSLOT]; region++)
+    if (region->memory_size == mapsize &&
+       region->guest_phys_addr == targ &&
+       region->userspace_addr == (uintptr_t)addr)
+      /* mapping already exists */
+      return;
   /* with KVM we need to manually remove/shrink existing mappings */
   munmap_kvm(targ, mapsize);
   mmap_kvm_no_overlap(targ, addr, mapsize);
