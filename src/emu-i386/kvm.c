@@ -38,6 +38,7 @@
 #include "vgaemu.h"
 #include "mapping.h"
 #include "sig.h"
+#include "smalloc.h"
 
 #ifndef X86_EFLAGS_FIXED
 #define X86_EFLAGS_FIXED 2
@@ -100,9 +101,10 @@ static struct monitor {
     Gatedesc idt[IDT_ENTRIES];               /* 2200 */
     unsigned char padding2[0x3000-0x2200
 	-IDT_ENTRIES*sizeof(Gatedesc)
-	-sizeof(unsigned int)
+	-2*sizeof(unsigned int)
 	-sizeof(struct vm86_regs)];          /* 2308 */
-    unsigned int cr2;         /* Fault stack at 2FA8 */
+    unsigned int flush_tlb;   /* Fault stack at 2FA4 */
+    unsigned int cr2;
     struct vm86_regs regs;
     /* 3000: page directory, 4000: page table */
     unsigned int pde[PAGE_SIZE/sizeof(unsigned int)];
@@ -119,28 +121,26 @@ static struct monitor {
 
 static struct kvm_run *run;
 static int vmfd, vcpufd;
-static volatile int mprotected_kvm = 0;
+static smpool kvm_mpool;
 
-#define MAXSLOT 40
+#define MAXSLOT 10
 static struct kvm_userspace_memory_region maps[MAXSLOT];
 
 /* initialize KVM virtual machine monitor */
 void init_kvm_monitor(void)
 {
-  int ret, i, j;
+  int ret, i;
   struct kvm_regs regs;
   struct kvm_sregs sregs;
-
-  /* Map guest memory: only conventional memory + HMA for now */
-  mmap_kvm(0, mem_base, LOWMEM_SIZE + HMASIZE);
 
   /* create monitor structure in memory */
   monitor = mmap(NULL, sizeof(*monitor), PROT_READ | PROT_WRITE,
 		 MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  memset(monitor, 0, sizeof(*monitor));
+
   /* Map guest memory: TSS */
   mmap_kvm(LOWMEM_SIZE + HMASIZE, monitor, sizeof(*monitor));
 
-  memset(monitor, 0, sizeof(*monitor));
   /* trap all I/O instructions with GPF */
   memset(monitor->io_bitmap, 0xff, TSS_IOPB_SIZE+1);
 
@@ -201,11 +201,9 @@ void init_kvm_monitor(void)
   /* we need one page directory entry */
   monitor->pde[0] = (sregs.tr.base + offsetof(struct monitor, pte))
     | (PG_PRESENT | PG_RW | PG_USER);
-  for (i = 0; i < (LOWMEM_SIZE + HMASIZE) / PAGE_SIZE; i++)
-    monitor->pte[i] = i * PAGE_SIZE | (PG_PRESENT | PG_RW | PG_USER);
-  for (j = 0; j < offsetof(struct monitor, code) / PAGE_SIZE; j++)
-    monitor->pte[i+j] = (i+j) * PAGE_SIZE | PG_PRESENT | PG_RW;
-  monitor->pte[i+j] = ((i+j) * PAGE_SIZE) | PG_PRESENT;
+  /* write permissions for monitor data */
+  for (i = 0; i < offsetof(struct monitor, code) / PAGE_SIZE; i++)
+    monitor->pte[(LOWMEM_SIZE + HMASIZE) / PAGE_SIZE + i] |= PG_RW;
 
   sregs.cr0 |= X86_CR0_PE | X86_CR0_PG;
   sregs.cr4 |= X86_CR4_VME;
@@ -232,7 +230,7 @@ void init_kvm_monitor(void)
   /* just after the HLT */
   regs.rip = sregs.tr.base + offsetof(struct monitor, code) +
     (kvm_mon_hlt - kvm_mon_start) + 1;
-  regs.rsp = sregs.tr.base + offsetof(struct monitor, cr2);
+  regs.rsp = sregs.tr.base + offsetof(struct monitor, flush_tlb);
   regs.rflags = X86_EFLAGS_FIXED;
   ret = ioctl(vcpufd, KVM_SET_REGS, &regs);
   if (ret == -1) {
@@ -266,8 +264,7 @@ int init_kvm_cpu(void)
      this is only really needed if the vcpu is started in real mode and
      the kernel needs to emulate that using V86 mode, as is necessary
      on Nehalem and earlier Intel CPUs */
-  ret = ioctl(vmfd, KVM_SET_TSS_ADDR,
-	      (unsigned long)(LOWMEM_SIZE + HMASIZE + sizeof(struct monitor)));
+  ret = ioctl(vmfd, KVM_SET_TSS_ADDR, 0xffff0000);
   if (ret == -1) {
     warn("KVM: KVM_SET_TSS_ADDR: %s\n", strerror(errno));
     return 0;
@@ -322,10 +319,14 @@ static void set_kvm_memory_region(struct kvm_userspace_memory_region *region)
   }
 }
 
-static void mmap_kvm_no_overlap(unsigned targ, void *addr, size_t mapsize)
+void alloc_mapping_kvm(void *addr, size_t mapsize)
 {
   struct kvm_userspace_memory_region *region;
   int slot;
+
+  if (maps[0].memory_size == 0)
+    /* first mapping: initialize to 2G - one page */
+    sminit_phys_mem(&kvm_mpool, 0, 0x7ffff000);
 
   for (slot = 0; slot < MAXSLOT; slot++)
     if (maps[slot].memory_size == 0) break;
@@ -337,45 +338,61 @@ static void mmap_kvm_no_overlap(unsigned targ, void *addr, size_t mapsize)
 
   region = &maps[slot];
   region->slot = slot;
-  region->guest_phys_addr = targ;
+  region->guest_phys_addr = (uintptr_t)smalloc(&kvm_mpool, mapsize);
   region->userspace_addr = (uintptr_t)addr;
   region->memory_size = mapsize;
   set_kvm_memory_region(region);
 }
 
-static void munmap_kvm(unsigned targ, size_t mapsize)
+void free_mapping_kvm(void *addr)
 {
-  /* unmaps KVM regions from targ to targ+mapsize, taking care of overlaps */
-  int slot;
-  for (slot = 0; slot < MAXSLOT; slot++) {
-    struct kvm_userspace_memory_region *region = &maps[slot];
-    size_t sz = region->memory_size;
-    unsigned gpa = region->guest_phys_addr;
-    if (sz > 0 && targ + mapsize > gpa && targ < gpa + sz) {
-      /* overlap: first  unmap this mapping */
-      region->memory_size = 0;
-      set_kvm_memory_region(region);
-      /* may need to remap head or tail */
-      if (gpa < targ) {
-	region->memory_size = targ - gpa;
-	set_kvm_memory_region(region);
-      }
-      if (gpa + sz > targ + mapsize) {
-	mmap_kvm_no_overlap(targ + mapsize,
-			    (void *)((uintptr_t)region->userspace_addr +
-				     targ + mapsize - gpa),
-			    gpa + sz - (targ + mapsize));
-      }
-    }
+  struct kvm_userspace_memory_region *map;
+
+  for (map = maps; map < &maps[MAXSLOT]; map++)
+    if (map->userspace_addr == (uintptr_t)addr) break;
+
+  if (map == &maps[MAXSLOT]) {
+    perror("KVM: cannot find addr to free memory region");
+    leavedos(99);
   }
+
+  smfree(&kvm_mpool, (void *)map->guest_phys_addr);
+  map->memory_size = 0;
+  set_kvm_memory_region(map);
+}
+
+void alias_mapping_kvm(unsigned targ, size_t mapsize, int protect, void *addr)
+{
+  size_t pagesize = sysconf(_SC_PAGESIZE);
+  unsigned int page, base = -1;
+  struct kvm_userspace_memory_region *map;
+
+  if (targ >= LOWMEM_SIZE + HMASIZE && addr != monitor) return;
+
+  for (map = maps; map < &maps[MAXSLOT]; map++)
+    if (map->userspace_addr <= (uintptr_t)addr &&
+	map->userspace_addr + map->memory_size > (uintptr_t)addr)
+      break;
+
+  if (map == &maps[MAXSLOT]) {
+    perror("KVM: cannot find physical memory to alias");
+    leavedos(99);
+  }
+
+  base = map->guest_phys_addr + (uintptr_t)addr - map->userspace_addr;
+
+  for (page = targ / pagesize; page < (targ + mapsize) / pagesize; page++) {
+    monitor->pte[page] = base | PG_PRESENT;
+    base += pagesize;
+  }
+  monitor->flush_tlb = 1;
+  mprotect_kvm(MEM_BASE32(targ), mapsize, protect);
 }
 
 void mmap_kvm(unsigned targ, void *addr, size_t mapsize)
 {
-  if (targ >= LOWMEM_SIZE + HMASIZE && addr != monitor) return;
-  /* with KVM we need to manually remove/shrink existing mappings */
-  munmap_kvm(targ, mapsize);
-  mmap_kvm_no_overlap(targ, addr, mapsize);
+  alloc_mapping_kvm(addr, mapsize);
+  alias_mapping_kvm(targ, mapsize, PROT_NONE, addr);
 }
 
 void mprotect_kvm(void *addr, size_t mapsize, int protect)
@@ -386,8 +403,7 @@ void mprotect_kvm(void *addr, size_t mapsize, int protect)
   unsigned int limit = (LOWMEM_SIZE + HMASIZE) / pagesize;
   unsigned int page;
 
-  if (start >= limit || monitor == NULL) return;
-  if (end > limit) end = limit;
+  if (start >= limit) return;
 
   for (page = start; page < end; page++) {
     monitor->pte[page] &= ~(PG_PRESENT | PG_RW | PG_USER);
@@ -397,7 +413,7 @@ void mprotect_kvm(void *addr, size_t mapsize, int protect)
       monitor->pte[page] |= PG_PRESENT | PG_USER;
   }
 
-  mprotected_kvm = 1;
+  monitor->flush_tlb = 1;
 }
 
 /* This function works like handle_vm86_fault in the Linux kernel,
@@ -537,17 +553,7 @@ int kvm_vm86(struct vm86_struct *info)
           KVM is re-entered asking it to exit when interrupt injection is
           possible, then it exits with this code. This only happens if a signal
           occurs during execution of the monitor code in kvmmon.S.
-       4. ret==-1 and errno == EFAULT: this can happen if code in vgaemu.c
-          calls mprotect in parallel and the TLB is out of sync with the
-          actual page tables; if this happen we retry and it should not happen
-          again since the KVM exit/entry makes everything sync'ed.
     */
-    if (mprotected_kvm) { // case 4
-      mprotected_kvm = 0;
-      if (ret == -1 && errno == EFAULT)
-	ret = ioctl(vcpufd, KVM_RUN, NULL);
-    }
-
     exit_reason = run->exit_reason;
     if (ret == -1 && errno == EINTR) {
       exit_reason = KVM_EXIT_INTR;
@@ -598,6 +604,7 @@ int kvm_vm86(struct vm86_struct *info)
 
   info->regs = *regs;
   trapno = regs->__null_gs;
+  monitor->flush_tlb = 0;
   if (vm86_ret == VM86_SIGNAL && trapno != 0x20) {
     struct sigcontext sc, *scp = &sc;
     _cr2 = (uintptr_t)MEM_BASE32(monitor->cr2);

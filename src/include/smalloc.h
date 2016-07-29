@@ -7,6 +7,8 @@
 #ifndef __SMALLOC_H
 #define __SMALLOC_H
 
+#include <stdint.h>
+
 struct memnode {
   struct memnode *next;
   size_t size;
@@ -17,6 +19,7 @@ struct memnode {
 typedef struct mempool {
   size_t size;
   size_t avail;
+  int phys_mem;
   struct memnode mn;
   int (*commit)(void *area, size_t size);
   int (*uncommit)(void *area, size_t size);
@@ -27,6 +30,7 @@ extern void *smalloc(struct mempool *mp, size_t size);
 extern void smfree(struct mempool *mp, void *ptr);
 extern void *smrealloc(struct mempool *mp, void *ptr, size_t size);
 extern int sminit(struct mempool *mp, void *start, size_t size);
+extern int sminit_phys_mem(struct mempool *mp, uintptr_t start, size_t size);
 extern int sminit_com(struct mempool *mp, void *start, size_t size,
     int (*commit)(void *area, size_t size),
     int (*uncommit)(void *area, size_t size));

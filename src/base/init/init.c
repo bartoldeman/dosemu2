@@ -346,6 +346,9 @@ void low_mem_init(void)
     leavedos(98);
   }
 
+  if (config.cpu_vm == CPUVM_KVM)
+    init_kvm_monitor();
+
   mem_base = mem_reserve();
   result = alias_mapping(MAPPING_INIT_LOWRAM, 0, LOWMEM_SIZE + HMASIZE,
 			 PROT_READ | PROT_WRITE | PROT_EXEC, lowmem);
@@ -353,9 +356,6 @@ void low_mem_init(void)
     perror ("LOWRAM mmap");
     exit(EXIT_FAILURE);
   }
-
-  if (config.cpu_vm == CPUVM_KVM)
-    init_kvm_monitor();
 
   /* keep conventional memory protected as long as possible to protect
      NULL pointer dereferences */

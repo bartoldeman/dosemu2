@@ -24,6 +24,9 @@ int init_kvm_cpu(void);
 void init_kvm_monitor(void);
 int kvm_vm86(struct vm86_struct *info);
 void mprotect_kvm(void *addr, size_t mapsize, int protect);
+void alloc_mapping_kvm(void *addr, size_t mapsize);
+void free_mapping_kvm(void *addr);
+void alias_mapping_kvm(unsigned targ, size_t mapsize, int protect, void *addr);
 void mmap_kvm(unsigned targ, void *addr, size_t mapsize);
 
 #endif

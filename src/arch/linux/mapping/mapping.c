@@ -212,7 +212,7 @@ int alias_mapping(int cap, dosaddr_t targ, size_t mapsize, int protect, void *so
   if (targ != (dosaddr_t)-1)
     update_aliasmap(targ, mapsize, source);
   if (config.cpu_vm == CPUVM_KVM)
-    mprotect_kvm(addr, mapsize, protect);
+    alias_mapping_kvm(DOSADDR_REL(addr), mapsize, protect, source);
   Q__printf("MAPPING: %s alias created at %p\n", cap, addr);
 
   return 0;
@@ -325,18 +325,6 @@ int mprotect_mapping(int cap, dosaddr_t targ, size_t mapsize, int protect)
 
   Q__printf("MAPPING: mprotect, cap=%s, addr=%p, size=%zx, protect=%x\n",
 	cap, addr, mapsize, protect);
-  /* it is important to r/o protect the KVM guest page tables BEFORE
-     calling mprotect as this function is called by parallel threads
-     (vgaemu.c:_vga_emu_update).
-     Otherwise the page can be r/w in the guest but r/o on the host which
-     causes KVM to exit with EFAULT when the guest writes there.
-     We do not need to worry about caching/TLBs because the kernel will
-     walk the guest page tables (see kernel:
-     Documentation/virtual/kvm/mmu.txt:
-     - if needed, walk the guest page tables to determine the guest translation
-       (gva->gpa or ngpa->gpa)
-       - if permissions are insufficient, reflect the fault back to the guest)
-  */
   if (config.cpu_vm == CPUVM_KVM)
     mprotect_kvm(addr, mapsize, protect);
   ret = mprotect(addr, mapsize, protect);
@@ -477,6 +465,8 @@ void *alloc_mapping(int cap, size_t mapsize)
   Q__printf("MAPPING: alloc, cap=%s size=%#zx\n", cap, mapsize);
   addr = mappingdriver->alloc(cap, mapsize);
   mprotect(addr, mapsize, PROT_READ | PROT_WRITE);
+  if (config.cpu_vm == CPUVM_KVM)
+    alloc_mapping_kvm(addr, mapsize);
 
   if (cap & MAPPING_INIT_LOWRAM) {
     Q__printf("MAPPING: LOWRAM_INIT, cap=%s, base=%p\n", cap, addr);
@@ -491,12 +481,15 @@ void free_mapping(int cap, void *addr, size_t mapsize)
   if (cap & MAPPING_KMEM) {
     return;
   }
+  if (config.cpu_vm == CPUVM_KVM)
+    free_mapping_kvm(addr);
   mprotect(addr, mapsize, PROT_READ | PROT_WRITE);
   mappingdriver->free(cap, addr, mapsize);
 }
 
 void *realloc_mapping(int cap, void *addr, size_t oldsize, size_t newsize)
 {
+  void *newaddr;
   if (!addr) {
     if (oldsize)  // no-no, realloc of the lowmem is not good too
       dosemu_error("realloc_mapping() called with addr=NULL, oldsize=%#zx\n", oldsize);
@@ -505,7 +498,12 @@ void *realloc_mapping(int cap, void *addr, size_t oldsize, size_t newsize)
   }
   if (!oldsize)
     dosemu_error("realloc_mapping() addr=%p, oldsize=0\n", addr);
-  return mappingdriver->realloc(cap, addr, oldsize, newsize);
+  newaddr = mappingdriver->realloc(cap, addr, oldsize, newsize);
+  if (newaddr != (void *)-1 && config.cpu_vm == CPUVM_KVM) {
+    free_mapping_kvm(addr);
+    alloc_mapping_kvm(newaddr, newsize);
+  }
+  return newaddr;
 }
 
 int munmap_mapping(int cap, dosaddr_t targ, size_t mapsize)

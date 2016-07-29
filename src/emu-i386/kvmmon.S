@@ -53,9 +53,16 @@ kvm_mon_main:
         push %ebx
         mov %cr2,%eax
         push %eax
+        push %eax
 	.globl kvm_mon_hlt
 kvm_mon_hlt:
         hlt
+        pop %eax
+        orl %eax,%eax /* page tables changed? */
+        je skipcr3
+        mov %cr3,%eax
+        mov %eax,%cr3
+skipcr3:
         pop %eax
         pop %ebx
         pop %ecx

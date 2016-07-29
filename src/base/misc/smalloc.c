@@ -193,7 +193,8 @@ static struct memnode *sm_alloc_mn(struct mempool *mp, size_t size)
   mn->used = 1;
   mntruncate(mn, size);
   assert(mn->size == size);
-  memset(mn->mem_area, 0, size);
+  if (!mp->phys_mem)
+    memset(mn->mem_area, 0, size);
   return mn;
 }
 
@@ -253,8 +254,10 @@ static struct memnode *sm_realloc_alloc_mn(struct mempool *mp,
         return NULL;
     }
     pmn->used = 1;
-    memmove(pmn->mem_area, mn->mem_area, mn->size);
-    memset(pmn->mem_area + mn->size, 0, size - mn->size);
+    if (!mp->phys_mem) {
+      memmove(pmn->mem_area, mn->mem_area, mn->size);
+      memset(pmn->mem_area + mn->size, 0, size - mn->size);
+    }
     mn->used = 0;
     if (size < pmn->size + mn->size) {
       size_t overl = size > pmn->size ? size - pmn->size : 0;
@@ -272,7 +275,8 @@ static struct memnode *sm_realloc_alloc_mn(struct mempool *mp,
 	    "SMALLOC: Out Of Memory on realloc, requested=%zu\n", size);
       return NULL;
     }
-    memcpy(new_mn->mem_area, mn->mem_area, mn->size);
+    if (!mp->phys_mem)
+      memcpy(new_mn->mem_area, mn->mem_area, mn->size);
     smfree(mp, mn->mem_area);
   }
   return new_mn;
@@ -308,7 +312,8 @@ void *smrealloc(struct mempool *mp, void *ptr, size_t size)
       /* expand by shrinking next memnode */
       if (!sm_commit_simple(mp, nmn->mem_area, size - mn->size))
         return NULL;
-      memset(nmn->mem_area, 0, size - mn->size);
+      if (!mp->phys_mem)
+	memset(nmn->mem_area, 0, size - mn->size);
       mntruncate(mn, size);
     } else {
       /* need to allocate new memnode */
@@ -333,6 +338,12 @@ int sminit(struct mempool *mp, void *start, size_t size)
   mp->uncommit = NULL;
   mp->smerr = smerr;
   return 0;
+}
+
+int sminit_phys_mem(struct mempool *mp, uintptr_t start, size_t size)
+{
+  sminit(mp, (void *)start, size);
+  mp->phys_mem = 1;
 }
 
 int sminit_com(struct mempool *mp, void *start, size_t size,
