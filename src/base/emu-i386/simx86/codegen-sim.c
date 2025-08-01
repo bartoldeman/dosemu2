@@ -3068,6 +3068,7 @@ unsigned Exec_x86_sim(unsigned *mem_ref, unsigned long *flg, IGen *IG)
 	P0 = (unsigned)-1;
 	do {
 		int op = IG->op;
+		OVERR_DS = IG->ovds;
 		if (op && op <= A_SR_SH4) {
 			AddrGen_sim(op, IG->mode, IG->p0, IG->p1, IG->p2, IG->p3, IG->p4);
 			if (V86MODE() && (0 == (IG->mode & (ADDR16 | MLEA))) && TR1.d > 0xffff) {
@@ -3089,6 +3090,7 @@ unsigned Exec_x86_sim(unsigned *mem_ref, unsigned long *flg, IGen *IG)
 		}
 		IG++;
 	} while (P0 == (unsigned int)-1);
+	OVERR_DS = Ofs_XDS;
 	currentIG = NULL;
 	*mem_ref = TheCPU.mem_ref;
 	FlagSync_All();
