@@ -597,7 +597,7 @@ static void Cpu2Reg(struct vm86_struct *info)
   regs->eflags |= EFLAGS_IF;
 
   if (TheCPU.fpstate == NULL) {
-    if (!CONFIG_CPUSIM)
+    if (!CONFIG_CPUSIM && !CONFIG_CPUSIM_BYTECODE)
       savefpstate(vm86_fpu_state);
     else
       fp87_save_except();
@@ -677,7 +677,7 @@ static void Cpu2Scp(cpuctx_t *scp, int trapno)
    */
   if (!TheCPU.err) _err = 0;		//???
   if (TheCPU.fpstate == NULL) {
-    if (!CONFIG_CPUSIM)
+    if (!CONFIG_CPUSIM && !CONFIG_CPUSIM_BYTECODE)
       savefpstate(vm86_fpu_state);
     else
       fp87_save_except();
@@ -1381,7 +1381,7 @@ static void load_fpu_state(void)
   int i;
   struct emu_fsave fs;
 
-  if (!CONFIG_CPUSIM)
+  if (!CONFIG_CPUSIM && !CONFIG_CPUSIM_BYTECODE)
     return;
   fxsave_to_fsave(&vm86_fpu_state, &fs);
   TheCPU.fpstt = 0;
@@ -1410,7 +1410,7 @@ static void save_fpu_state(void)
   int i, k;
   struct emu_fsave fs = {};
 
-  if (!CONFIG_CPUSIM)
+  if (!CONFIG_CPUSIM && !CONFIG_CPUSIM_BYTECODE)
     return;
   k = TheCPU.fpstt;
   for (i = 0; i < 8; i++) {

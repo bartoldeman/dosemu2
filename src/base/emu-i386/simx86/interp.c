@@ -3016,7 +3016,7 @@ repag0:
 				   exceptions, and set rounding properly;
 				   for JIT, load emulated FPU state
 				   into real FPU */
-				if (CONFIG_CPUSIM) {
+				if (CONFIG_CPUSIM || CONFIG_CPUSIM_BYTECODE) {
 					fesetenv(FE_DFL_ENV);
 					fp87_set_rounding();
 				} else

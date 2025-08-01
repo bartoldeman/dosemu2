@@ -60,6 +60,7 @@ extern int MaxCPages;
 extern int SpecPrejits;
 #endif
 
+#define CONFIG_CPUSIM_BYTECODE 1
 #ifdef X86_JIT
 #if 0
 #define CONFIG_CPUSIM (config.cpusim || (CEmuStat & CeS_INSTREMU))

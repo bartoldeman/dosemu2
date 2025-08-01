@@ -115,6 +115,7 @@
 #include "misc/dlmalloc.h"
 #include "mapping/mapping.h"
 #include "codegen-x86.h"
+#include "codegen-sim.h"
 #include "cpatch.h"
 
 static void Gen_x86(int op, int mode, ...);
@@ -179,7 +180,7 @@ void InitGen_x86(void)
 
 	Gen = Gen_x86;
 	AddrGen = AddrGen_x86;
-	UseLinker = USE_LINKER;
+	UseLinker = CONFIG_CPUSIM_BYTECODE ? 0 : USE_LINKER;
 }
 
 
@@ -205,6 +206,10 @@ static unsigned char *CodeGen(unsigned char *CodePtr, unsigned char *BaseGenBuf,
 	if (debug_level('e')) t0 = GETTSC();
 #endif
 
+	if (CONFIG_CPUSIM_BYTECODE) {
+		memcpy(Cp, IG, sizeof(*IG));
+		Cp += sizeof *IG;
+	} else
 	switch(IG->op) {
 	case A_DI_0:			// base(32), imm
 		// movl $imm,%%edi
@@ -2720,7 +2725,7 @@ static void Gen_x86(int op, int mode, ...)
 		break;
 
 	case O_FOP:
-		I->flags |= F_FPOP;
+		if (!CONFIG_CPUSIM_BYTECODE) I->flags |= F_FPOP;
 		// fall through
 	case O_INT: {
 		unsigned char exop = (unsigned char)va_arg(ap,int);
@@ -2872,10 +2877,16 @@ static CodeBuf *ProduceCode(unsigned int PC, IMeta *I0)
 	if (GL->gen[GL->ngen-1].op < JMP_INDIRECT) {
 		unsigned char *p = CodePtr;
 		/* copy tail instructions to the end of the code block */
-		memcpy(p, TailCode, TAILSIZE);
-		p += TAILFIX;
-		*((unsigned int *)p) = PC;
-		CodePtr += TAILSIZE;
+		if (CONFIG_CPUSIM_BYTECODE) {
+			IGen IG = {.op = JMP_LINK, .p1 = PC};
+			memcpy(p, &IG, sizeof(IG));
+			CodePtr += sizeof(IG);
+		} else {
+			memcpy(p, TailCode, TAILSIZE);
+			p += TAILFIX;
+			*((unsigned int *)p) = PC;
+			CodePtr += TAILSIZE;
+		}
 	}
 
 	/* show jump+tail code */
@@ -3237,6 +3248,7 @@ TNode *Close_x86(unsigned int PC, int mode)
 static unsigned int Exec_x86_pre(unsigned char *ecpu)
 {
 	unsigned long flg;
+	if (CONFIG_CPUSIM_BYTECODE) return 0;
 
 	/* get the protected mode flags. Note that RF and VM are cleared
 	 * by pushfd (but not by ints and traps) */
@@ -3283,6 +3295,9 @@ static unsigned Exec_x86_asm(unsigned *mem_ref, unsigned long *flg,
 {
 	unsigned ePC;
 	void *jb;
+
+	if (CONFIG_CPUSIM_BYTECODE)
+		return Exec_x86_sim(mem_ref, flg, (IGen *)SeqStart);
 
 	jb = jit_base;
 	InCompiledCode = 1;

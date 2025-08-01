@@ -101,7 +101,7 @@ void init_emu_npu (void)
 {
 	int i;
 #ifdef X86_JIT
-	if (!CONFIG_CPUSIM) {
+	if (!CONFIG_CPUSIM && !CONFIG_CPUSIM_BYTECODE) {
 		init_emu_npu_x86();
 		return;
 	}

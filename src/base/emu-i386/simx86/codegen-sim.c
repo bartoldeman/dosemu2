@@ -77,6 +77,7 @@ void (*AddrGen)(int op, int mode, ...);
 int UseLinker = 0;
 
 static unsigned int P0 = (unsigned)-1;
+unsigned char *currentIG;
 
 /////////////////////////////////////////////////////////////////////////////
 
@@ -3061,3 +3062,36 @@ void sim_write_qword(dosaddr_t x, uint64_t y)
 }
 
 /////////////////////////////////////////////////////////////////////////////
+
+unsigned Exec_x86_sim(unsigned *mem_ref, unsigned long *flg, IGen *IG)
+{
+	P0 = (unsigned)-1;
+	do {
+		int op = IG->op;
+		if (op && op <= A_SR_SH4) {
+			AddrGen_sim(op, IG->mode, IG->p0, IG->p1, IG->p2, IG->p3, IG->p4);
+			if (V86MODE() && (0 == (IG->mode & (ADDR16 | MLEA))) && TR1.d > 0xffff) {
+				TheCPU.err = EXCP0D_GPF;
+				break;
+			}
+		} else {
+			unsigned int p0 = IG->p0;
+			if (op == L_MOVZS) p0 >>= 3;
+			currentIG = (unsigned char *)IG; /* used by e_invalidate for SMC node self-hit */
+			Gen_sim(op, IG->mode, p0, IG->p1, IG->p2, IG->p3);
+			if (TheCPU.err) {
+				TheCPU.err2 = TheCPU.err;
+				TheCPU.err = 0;
+				if (op == O_DIV || op == O_IDIV)
+					P0 = IG->p0;
+				break;
+			}
+		}
+		IG++;
+	} while (P0 == (unsigned int)-1);
+	currentIG = NULL;
+	*mem_ref = TheCPU.mem_ref;
+	FlagSync_All();
+	*flg = EFLAGS & EFLAGS_CC;
+	return P0;
+}

@@ -1146,8 +1146,13 @@ static void BreakNode(TNode *G, unsigned char *eip)
   for (i=0; i<G->seqnum; i++) {
     if (A->daddr >= ebase) {		// found following instr
 	p = G->addr + A->daddr;		// translated IP of following instr
-	memcpy(p, TailCode, TAILSIZE);
-	*((int *)(p+TAILFIX)) = G->key + A->dnpc;
+	if (CONFIG_CPUSIM_BYTECODE) {
+	  IGen IG = {.op = JMP_LINK, .p1 = G->key+A->dnpc};
+	  memcpy(p, &IG, sizeof(IG));
+	} else {
+	  memcpy(p, TailCode, TAILSIZE);
+	  *((int *)(p+TAILFIX)) = G->key + A->dnpc;
+	}
 	if (debug_level('e')>1)
 		e_printf("============ Force node closing at %08x(%p)\n",
 			 (G->key+A->dnpc),p);
@@ -1277,7 +1282,7 @@ static void _e_invalidate(unsigned data, int cnt)
 		return;
 	// no need to invalidate the whole page here,
 	// as the page does not need to be unprotected
-	InvalidateNodeRange(data, cnt, 0);
+	InvalidateNodeRange(data, cnt, currentIG);
 }
 
 void e_invalidate(unsigned data, int cnt)

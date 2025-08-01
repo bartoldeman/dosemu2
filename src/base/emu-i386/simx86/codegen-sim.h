@@ -36,6 +36,7 @@
 #define _EMU86_CODEGEN_SIM_H
 
 #include "vgaemu.h"
+#include "trees.h"
 
 /////////////////////////////////////////////////////////////////////////////
 
@@ -85,6 +86,9 @@ extern void FlagSync_All (void);
 extern void Gen_sim(int op, int mode, ...);
 extern void AddrGen_sim(int op, int mode, ...);
 extern void InitGen_sim(void);
+
+extern unsigned char *currentIG;
+extern unsigned Exec_x86_sim(unsigned *mem_ref, unsigned long *flg, IGen *IG);
 
 /////////////////////////////////////////////////////////////////////////////
 
