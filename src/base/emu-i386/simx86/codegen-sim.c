@@ -3065,6 +3065,7 @@ void sim_write_qword(dosaddr_t x, uint64_t y)
 
 unsigned Exec_x86_sim(unsigned *mem_ref, unsigned long *flg, IGen *IG)
 {
+	char saved_overr_ds = OVERR_DS;
 	P0 = (unsigned)-1;
 	do {
 		int op = IG->op;
@@ -3090,7 +3091,7 @@ unsigned Exec_x86_sim(unsigned *mem_ref, unsigned long *flg, IGen *IG)
 		}
 		IG++;
 	} while (P0 == (unsigned int)-1);
-	OVERR_DS = Ofs_XDS;
+	OVERR_DS = saved_overr_ds;
 	currentIG = NULL;
 	*mem_ref = TheCPU.mem_ref;
 	FlagSync_All();
