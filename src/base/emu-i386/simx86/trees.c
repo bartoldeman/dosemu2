@@ -88,7 +88,7 @@ static void DumpTree (FILE *fd);
 #define FINDTREE_CACHE_HASH_MASK 0xfff
 static TNode *findtree_cache[FINDTREE_CACHE_HASH_MASK+1];
 
-static int NodeLimit = 10000;
+static int NodeLimit = 30000;
 
 static void RemoveNode_locked(TNode *G);
 
