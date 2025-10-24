@@ -531,9 +531,8 @@ static void DumpTree (FILE *fd)
 
 #endif // DEBUG_TREE
 
-static int TraverseAndClean(void)
+static void TraverseAndClean(void)
 {
-  int cnt = 0;
   IntervalTreeNode *p;
   TNode *G;
 #if PROFILE >= 2
@@ -544,7 +543,7 @@ static int TraverseAndClean(void)
 
   if (Traverser == NULL) {
       Traverser = interval_tree_iter_first(&ITreeRoot, 0, 0xffffffff);
-      if (Traverser == NULL) return 0;
+      if (Traverser == NULL) return;
   }
 
   /* walk to next node */
@@ -561,12 +560,7 @@ static int TraverseAndClean(void)
   }
   if (G->alive<=0) {
       if (debug_level('e')>2) e_printf("Delete node %08x\n",G->itree.start);
-      e_unmarkpage(G->itree.start, G->itree.last - G->itree.start + 1);
-      NodeUnlinker(G);
-      interval_tree_remove(&G->itree, &ITreeRoot);
-      dlfree(G->mblock);
-      free(G);
-      cnt++;
+      RemoveNode(G);
   }
   else {
       if (debug_level('e')>3)
@@ -577,7 +571,6 @@ static int TraverseAndClean(void)
 #if PROFILE >= 2
   if (debug_level('e')) CleanupTime += (GETTSC() - t0);
 #endif
-  return cnt;
 }
 
 /*
@@ -616,13 +609,17 @@ TNode *Move2Tree(IMeta *I0, CodeBuf *GenCodeBuf)
   nG->itree.start = key;
   nG->itree.last = key + I0->seqlen - 1;
   interval_tree_insert(&nG->itree, &ITreeRoot);
+  ninodes++;
   nG->alive = NODELIFE(nG);
   pthread_mutex_unlock(&trees_mtx);
 
   /* transfer info from first node of the Meta list to our new node */
   nG->seqnum = I0->ncount;
 #if PROFILE
-  if (debug_level('e')) if (nG->len > MaxNodeSize) MaxNodeSize = nG->len;
+  if (debug_level('e')) {
+    if (ninodes > MaxNodes) MaxNodes = ninodes;
+    if (nG->len > MaxNodeSize) MaxNodeSize = nG->len;
+  }
 #endif
   nG->len = I0->totlen;
   nG->flags = I0->flags;
@@ -842,6 +839,8 @@ static int BreakNode(TNode *G, unsigned char *eip)
 
 void RemoveNode(TNode *G)
 {
+  if (Traverser == &G->itree)
+    Traverser = interval_tree_iter_next(Traverser, 0, 0xffffffff);
   interval_tree_remove(&G->itree, &ITreeRoot);
   __atomic_store_n(&findtree_cache[G->itree.start&FINDTREE_CACHE_HASH_MASK],
 		   NULL, __ATOMIC_RELAXED);
@@ -849,6 +848,7 @@ void RemoveNode(TNode *G)
   NodeUnlinker(G);
   dlfree(G->mblock);
   free(G);
+  ninodes--;
 }
 
 int InvalidateNodeRange(int al, int len, unsigned char *eip)
@@ -1101,6 +1101,7 @@ void EndGen(void)
 	int csm = config.CPUSpeedInMhz*1000;
 #endif
 	CurrIMeta = -1;
+	InvalidateNodeRange(0, 0xffffffff, 0);
 #ifdef SHOW_STAT
 	for (i=0; i<cstx; i++) {
 	    dbug_printf("%04d %16Ld %8d %8d(%3d) %8d %d\n",i,(xCST[i].a/csm),
