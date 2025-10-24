@@ -114,17 +114,6 @@ extern int EmuSignals;
 extern int NodesFound;
 extern int TreeCleanups;
 
-typedef struct avltr_node
-{
-/* ----- Structure for a node in a right-threaded AVL tree. ----- */
-    struct TNode *data;		/* Pointer to data. */
-    struct avltr_node *link[2];	/* Subtrees or threads. */
-    signed char bal;		/* Balance factor. */
-    char cache;			/* Used during insertion. */
-    char pad;			/* Reserved for fully threaded trees. */
-    signed char rtag;		/* Right thread tag. */
-} avltr_node;
-
 typedef struct TNode
 {
 	IntervalTreeNode itree;
@@ -145,24 +134,6 @@ typedef struct TNode
 	unsigned mode;
 } TNode;
 
-/* Used for traversing a right-threaded AVL tree. */
-typedef struct avltr_traverser
-{
-    int init;				/* Initialized? */
-    struct avltr_node *p;		/* Last node returned. */
-} avltr_traverser;
-
-/* Structure which holds information about a threaded AVL tree. */
-typedef struct avltr_tree
-{
-    struct avltr_node root;	/* Tree root node. */
-    int count;			/* Number of nodes in the tree. */
-} avltr_tree;
-
-/* Tag types. */
-#define PLUS +1
-#define MINUS -1
-
 TNode *FindTree(int key);
 TNode *Move2Tree(IMeta *I0, CodeBuf *GenCodeBuf);
 void tree_gc(void);
@@ -173,6 +144,7 @@ unsigned int FindPC(const unsigned char *addr);
 int InvalidateNodeRange(int addr, int len, unsigned char *eip);
 void avltr_delete(const int key);
 void NodeLinker(TNode *LG, TNode *G);
+extern CodeBuf *BrokenMBlock;
 
 #ifdef DEBUG_TREE
 extern FILE *tLog;

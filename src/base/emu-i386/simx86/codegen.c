@@ -634,6 +634,10 @@ static unsigned ExecOne(TNode *G, unsigned *mem_ref, unsigned long *flg,
 	if (*pLastXKey != G->key)
 		NodeLinker(FindTree(*pLastXKey), G);
 	ePC = Exec(mem_ref, flg, ecpu, G->addr, G->flags, pLastXKey);
+	if (BrokenMBlock) {
+	  dlfree(BrokenMBlock);
+	  BrokenMBlock = NULL;
+	}
 #ifdef SKIP_EMU_VBIOS
 	if ((TheCPU.cs&0xf000)==config.vbios_seg && !TheCPU.err)
 		TheCPU.err = EXCP_GOBACK;
