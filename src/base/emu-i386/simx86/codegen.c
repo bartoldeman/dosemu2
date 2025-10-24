@@ -595,6 +595,11 @@ static void Exec_post(unsigned long flg, unsigned int mem_ref,
 	EFLAGS = (EFLAGS & ~EFLAGS_CC) | (flg &	EFLAGS_CC);
 	TheCPU.mem_ref = mem_ref;
 	CEmuStat &= ~CeS_STI;
+	if (TheCPU.err == EXCP_BREAKNODE) {
+		RemoveNode(BrokenNode);
+		BrokenNode = NULL;
+		TheCPU.err = 0;
+	}
 	if (TheCPU.err == EXCP_STISHADOW) {
 		CEmuStat |= CeS_STI;
 		TheCPU.err = 0;
@@ -634,10 +639,6 @@ static unsigned ExecOne(TNode *G, unsigned *mem_ref, unsigned long *flg,
 	if (*pLastXKey != G->itree.start)
 		NodeLinker(FindTree(*pLastXKey), G);
 	ePC = Exec(mem_ref, flg, ecpu, G->addr, G->flags, pLastXKey);
-	if (BrokenMBlock) {
-	  dlfree(BrokenMBlock);
-	  BrokenMBlock = NULL;
-	}
 #ifdef SKIP_EMU_VBIOS
 	if ((TheCPU.cs&0xf000)==config.vbios_seg && !TheCPU.err)
 		TheCPU.err = EXCP_GOBACK;

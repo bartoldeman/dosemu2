@@ -52,7 +52,7 @@
 
 IMeta	InstrMeta[MAXINODES];
 int	CurrIMeta = -1;
-CodeBuf *BrokenMBlock;
+TNode *BrokenNode;
 
 /* Tree structure to store collected code sequences */
 static IntervalTreeRoot ITreeRoot;
@@ -804,32 +804,60 @@ TNode *FindTree(int key)
  *
  */
 
-static void BreakNode(TNode *G, unsigned char *eip)
+static int BreakNode(TNode *G, unsigned char *eip)
 {
+  /* if the current eip is in *any* chunk of code that is deleted
+     (not just the one written to)
+     then we need to break the node immediately to go back to
+     the interpreter; otherwise the remaining chunk (that does
+     not officially exist anymore) that the SIGSEGV or patched
+     call returns to may write to the current unprotected page.
+  */
   Addr2Pc *A = G->pmeta;
   int ebase;
   unsigned char *p;
   int i;
+  unsigned char *ahE = G->addr + G->len;
 
-  if (eip==0) {
-	dbug_printf("Cannot break node %08x, eip=%p\n",G->itree.start,eip);
-	leavedos_main(0x7691);
+  if (eip && ADDR_IN_RANGE(eip,G->addr,ahE)) {
+    if (debug_level('e')>1)
+      e_printf("### Node self hit %p->%p..%p\n",
+	       eip,G->addr,ahE);
+  } else {
+    return 0;
   }
 
   ebase = eip - G->addr;
   for (i=0; i<G->seqnum; i++) {
     if (A->daddr >= ebase) {		// found following instr
+	TheCPU.err = EXCP_BREAKNODE;
+	BrokenNode = G;
+	/* Exclude last instruction, as there is no need to break
+	 * node after last instruction (it ends there anyway). */
+	if (i == G->seqnum) return 1;
 	IGen IG = (IGen){.op = JMP_TAILCODE, .p0 = G->itree.start + A->dnpc};
 	p = G->addr + A->daddr;		// translated IP of following instr
 	CodeGen(p, G->addr, &IG);
 	if (debug_level('e')>1)
 		e_printf("============ Force node closing at %08x(%p)\n",
 			 (G->itree.start+A->dnpc),p);
-	return;
+	return 1;
     }
     A++;
   }
   e_printf("============ Node %08x break failed\n",G->itree.start);
+  return 0;
+}
+
+void RemoveNode(TNode *G)
+{
+  interval_tree_remove(&G->itree, &ITreeRoot);
+  __atomic_store_n(&findtree_cache[G->itree.start&FINDTREE_CACHE_HASH_MASK],
+		   NULL, __ATOMIC_RELAXED);
+  e_unmarkpage(G->itree.start, G->itree.last - G->itree.start + 1);
+  NodeUnlinker(G);
+  dlfree(G->mblock);
+  free(G);
 }
 
 int InvalidateNodeRange(int al, int len, unsigned char *eip)
@@ -842,50 +870,22 @@ int InvalidateNodeRange(int al, int len, unsigned char *eip)
 
   if (debug_level('e')) t0 = GETTSC();
 #endif
-  ah = al + len;
-  if (debug_level('e')>1) dbug_printf("Invalidate area %08x..%08x\n",al,ah);
+  ah = al + len - 1;
+  if (debug_level('e')>1) dbug_printf("Invalidate area %08x..%08x\n",al,ah+1);
 
   pthread_mutex_lock(&trees_mtx);
-  IntervalTreeNode *p = interval_tree_iter_first(&ITreeRoot, al, al+len-1);
+  IntervalTreeNode *p = interval_tree_iter_first(&ITreeRoot, al, ah);
 
   /* walk tree in ascending, hopefully sorted, address order */
   for (;;) {
-      IntervalTreeNode *nextp = interval_tree_iter_next(p, al, al+len-1);
+      IntervalTreeNode *nextp = interval_tree_iter_next(p, al, ah);
       G = container_of(p, TNode, itree);
-      if (G->addr && (G->alive>0)) {
-	int ahG = G->itree.last + 1;
-	if (RANGE_INTERSECT(G->itree.start,ahG,al,ah)) {
-	    unsigned char *ahE;
+      {
 	    if (debug_level('e')>1)
 		dbug_printf("Invalidated node %p at %08x\n",G,G->itree.start);
-	    G->alive = 0;
-	    interval_tree_remove(&G->itree, &ITreeRoot);
-	    __atomic_store_n(&findtree_cache[G->itree.start&FINDTREE_CACHE_HASH_MASK],
-			     NULL, __ATOMIC_RELAXED);
-	    e_unmarkpage(G->itree.start, G->itree.last - G->itree.start + 1);
-	    NodeUnlinker(G);
 	    cleaned++;
-	    /* if the current eip is in *any* chunk of code that is deleted
-	        (not just the one written to)
-	       then we need to break the node immediately to go back to
-	       the interpreter; otherwise the remaining chunk (that does
-	       not officially exist anymore) that the SIGSEGV or patched
-	       call returns to may write to the current unprotected page.
-	    */
-	    /* Exclude last instruction, as there is no need to break
-	     * node after last instruction (it ends there anyway). */
-	    ahE = G->addr + G->pmeta[G->seqnum - 1].daddr;
-	    if (eip && ADDR_IN_RANGE(eip,G->addr,ahE)) {
-		if (debug_level('e')>1)
-		    e_printf("### Node self hit %p->%p..%p\n",
-			     eip,G->addr,ahE);
-		BreakNode(G, eip);
-		BrokenMBlock = G->mblock;
-	    } else {
-		dlfree(G->mblock);
-	    }
-	    free(G);
-	}
+	    if (!BreakNode(G, eip))
+		RemoveNode(G);
       }
       p = nextp;
       if (!p) break;

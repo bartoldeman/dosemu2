@@ -682,6 +682,7 @@ extern int SpecPrejits;
 #define EXCP_EMULEAVE	69
 #define EXCP_TFSET	71
 #define EXCP_STISHADOW	72
+#define EXCP_BREAKNODE	73
 
 /////////////////////////////////////////////////////////////////////////////
 
