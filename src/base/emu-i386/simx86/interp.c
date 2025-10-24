@@ -551,10 +551,14 @@ static int interp_post(unsigned int PC, unsigned int Interp_LONG_CS,
 
 #ifndef SINGLEBLOCK
 		IMeta *GL = &InstrMeta[CurrIMeta];
+
+		/* generate link to existing code if we bump into it */
+		if (GL->gen[GL->ngen-1].op < JMP_TAILCODE && FindTree(PC))
+			Gen(JMP_LINK, mode, PC, InstrMeta[0].npc);
+
 		if ((mode & MSSTP) ||
 		    (flags & F_LEAV) ||
 		    GL->gen[GL->ngen-1].op >= JMP_TAILCODE ||
-		    FindTree(PC) ||
 		    ((flags & F_SPRJ) && e_querymark(PC, SAFE_PRJ_GAP)))
 #endif
 		{
