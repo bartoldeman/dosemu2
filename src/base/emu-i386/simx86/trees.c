@@ -266,7 +266,7 @@ void NodeLinker(TNode *LG, TNode *G)
 #endif
 	if (debug_level('e')>8 && LG) e_printf("NodeLinker: %08x->%08x\n",LG->itree.start,G->itree.start);
 
-	if (LG && LG->alive>0 && LG->unlinked_jmp_targets) {	// node ends with links
+	if (LG && LG->unlinked_jmp_targets) {	// node ends with links
 		linknode(LG, G, &LG->clink_t, TARGET_T);
 		linknode(LG, G, &LG->clink_nt, TARGET_NT);
 	}
@@ -438,10 +438,6 @@ static void CheckLinks(void)
 	e_printf("DEBUG: node link check ok\n");
 	return;
     }
-    if (G->alive <= 0) {
-	e_printf("Node %p invalidated\n",G);
-	continue;
-    }
     if (debug_level('e')>5) e_printf("Node %p at %08x selfr=%p\n",G,G->itree.start,
 	G->mblock->bkptr);
     if (G->mblock->bkptr != G) {
@@ -478,11 +474,6 @@ static void DumpTree (FILE *fd)
 	return;
     }
     fprintf(fd,"\n-----------------------------------------------------------\n");
-    if (G->alive <= 0) {
-	fprintf(fd,"%04d Node %p invalidated\n",nn,G);
-	nn++;
-	continue;
-    }
     fprintf(fd,"%04d Node %p at %08x..%08x mblock=%p flags=%#x\n",
 	nn,G,G->itree.start,G->itree.last,G->mblock,G->flags);
     fprintf(fd,"     AVL (%p:%p),%d,%d,%d,%d\n",G->link[0],G->link[1],
@@ -507,7 +498,7 @@ static void DumpTree (FILE *fd)
 	    B = B->next;
 	}
     }
-    if (G->addr && G->pmeta) {
+    {
 	int i, j, k;
 	unsigned char *p = G->addr;
 	Addr2Pc *AP = G->pmeta;
@@ -562,13 +553,13 @@ static int TraverseAndClean(void)
       p = interval_tree_iter_first(&ITreeRoot, 0, 0xffffffff);
 
   G = container_of(Traverser, TNode, itree);
-  if ((G->addr != NULL) && (G->alive>0)) {
+  if (G->alive>0) {
       G->alive -= AGENODE;
       if (G->alive <= 0) {
 	if (debug_level('e')>2) e_printf("TraverseAndClean: node at %08x decayed\n",G->itree.start);
       }
   }
-  if ((G->addr == NULL) || (G->alive<=0)) {
+  if (G->alive<=0) {
       if (debug_level('e')>2) e_printf("Delete node %08x\n",G->itree.start);
       e_unmarkpage(G->itree.start, G->itree.last - G->itree.start + 1);
       NodeUnlinker(G);
@@ -724,7 +715,7 @@ static TNode *FindTree_tail(int key)
   I = interval_tree_iter_first(&ITreeRoot, key, key);
   G = container_of(I, TNode, itree);
 
-  if (G->addr && (G->alive>0) && G->itree.start == key) {
+  if (G->itree.start == key) {
 	if (debug_level('e')>3) e_printf("Found key %08x\n",key);
 	G->alive = NODELIFE(G);
 #if PROFILE
@@ -764,7 +755,7 @@ TNode *FindTree(int key)
      ~99.99% success rate */
   I = __atomic_load_n(&findtree_cache[key&FINDTREE_CACHE_HASH_MASK],
 		      __ATOMIC_RELAXED);
-  if (I && (I->alive>0) && (I->itree.start==key)) {
+  if (I && (I->itree.start==key)) {
 	if (debug_level('e')) {
 	    if (debug_level('e')>4)
 		e_printf("Found key %08x via cache\n", key);
