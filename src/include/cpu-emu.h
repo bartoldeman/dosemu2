@@ -61,7 +61,6 @@ extern void e_priv_iopl(int);
 #define CeS_PREJIT_PM	0x20000
 
 void leave_cpu_emu(void);
-void avltr_destroy(void);
 int e_vm86(struct vm86_struct *info);
 
 /* called from dpmi.c */

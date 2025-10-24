@@ -138,7 +138,6 @@ void InitTrees(void);
 
 unsigned int FindPC(const unsigned char *addr);
 int InvalidateNodeRange(int addr, int len, unsigned char *eip);
-void avltr_delete(const int key);
 void NodeLinker(TNode *LG, TNode *G);
 void RemoveNode(TNode *G);
 extern TNode *BrokenNode;

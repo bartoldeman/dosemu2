@@ -732,8 +732,8 @@ unsigned int DoExec(TNode *G, unsigned *pLastXKey)
 	}
 
 #if defined(SINGLESTEP)
-	InvalidateNodeRange(key, 1, NULL);
-	avltr_delete(key);
+	G = FindTree(key);
+	if (G) RemoveNode(G);
 #endif
 
 	return ePC;

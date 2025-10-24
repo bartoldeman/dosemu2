@@ -402,7 +402,7 @@ static unsigned int FindExecCode(unsigned int PC)
 		G = FindTree(PC);
 		if (G) {
 			if (!GoodNode(G)) {
-				InvalidateNodeRange(G->itree.start, G->itree.last - G->itree.start + 1, NULL);
+				RemoveNode(G);
 				G = NULL;
 			}
 			else if (debug_level('e')>2)
