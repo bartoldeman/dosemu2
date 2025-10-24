@@ -782,9 +782,14 @@ void init_emu_cpu(int cpu_type)
   mprot_init();
   InitGen();
   InitTrees();
-  sem_init(&prejit_sem, 0, 0);
-  pthread_create(&prejit_thr, NULL, prejit_thread, NULL);
-  prejit_init();
+#if !PREJIT_TEST
+  if (config.cpu_vm == CPUVM_KVM || config.cpu_vm_dpmi == CPUVM_KVM)
+#endif
+  {
+    sem_init(&prejit_sem, 0, 0);
+    pthread_create(&prejit_thr, NULL, prejit_thread, NULL);
+    prejit_init();
+  }
 
   IDT = NULL;
   if (GDT==NULL) {
@@ -927,10 +932,15 @@ void leave_cpu_emu(void)
 	LDT = NULL; GDT = NULL; IDT = NULL;
 	dbug_printf("======================= LEAVE CPU-EMU ===============\n");
 	if (debug_level('e')) print_statistics();
-	prejit_done();
-	pthread_cancel(prejit_thr);
-	pthread_join(prejit_thr, NULL);
-	sem_destroy(&prejit_sem);
+#if !PREJIT_TEST
+	if (config.cpu_vm == CPUVM_KVM || config.cpu_vm_dpmi == CPUVM_KVM)
+#endif
+	{
+	  prejit_done();
+	  pthread_cancel(prejit_thr);
+	  pthread_join(prejit_thr, NULL);
+	  sem_destroy(&prejit_sem);
+	}
 	flush_log();
 }
 
@@ -1581,6 +1591,10 @@ static int lockcnt;
 
 void prejit_lock(void)
 {
+#if !PREJIT_TEST
+    if (config.cpu_vm != CPUVM_KVM && config.cpu_vm_dpmi != CPUVM_KVM)
+      return;
+#endif
     prejit_sync();
     /* No actual locking: just wait til prejit stops. */
     pthread_mutex_lock(&run_mtx);
@@ -1592,6 +1606,10 @@ void prejit_lock(void)
 
 void prejit_unlock(void)
 {
+#if !PREJIT_TEST
+    if (config.cpu_vm != CPUVM_KVM && config.cpu_vm_dpmi != CPUVM_KVM)
+      return;
+#endif
     pthread_mutex_lock(&run_mtx);
     assert(lockcnt > 0);
     lockcnt--;

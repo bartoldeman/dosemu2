@@ -48,9 +48,6 @@
 int EmuSignals = 0;
 #endif
 
-/* this is probably unsafe with cpatch */
-#define SPEC_PREJIT 0
-
 static pthread_cond_t run_cnd = PTHREAD_COND_INITIALIZER;
 static int prejit_running;
 static pthread_mutex_t run_mtx = PTHREAD_MUTEX_INITIALIZER;

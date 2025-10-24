@@ -58,7 +58,9 @@ TNode *BrokenNode;
 static IntervalTreeRoot ITreeRoot;
 static IntervalTreeNode *Traverser = NULL;
 static int ninodes = 0;
+#if SPEC_PREJIT
 static pthread_mutex_t trees_mtx = PTHREAD_MUTEX_INITIALIZER;
+#endif
 
 int NodesParsed = 0;
 int NodesExecd = 0;
@@ -88,7 +90,9 @@ static TNode *findtree_cache[FINDTREE_CACHE_HASH_MASK+1];
 
 static int NodeLimit = 10000;
 
-#define RANGE_INTERSECT(al,ah,l,h)	({int _l2=(al);\
+static void RemoveNode_locked(TNode *G);
+
+#define RANGE_INTERSECT(al,ah,l,h)	({int _l2=(al);	\
 	int _h2=(ah); ((_h2 > (l)) && (_l2 < (h))); })
 #define ADDR_IN_RANGE(a,l,h)		({typeof(a) _a2=(a);	\
 	((_a2 >= (l)) && (_a2 < (h))); })
@@ -102,6 +106,9 @@ static int NodeLimit = 10000;
  */
 unsigned int FindPC(const unsigned char *addr)
 {
+#if SPEC_PREJIT
+  pthread_mutex_lock(&trees_mtx);
+#endif
   IntervalTreeNode *p = interval_tree_iter_first(&ITreeRoot, 0, 0xffffffffu);
   TNode *G;
   unsigned char *ahE;
@@ -127,6 +134,9 @@ unsigned int FindPC(const unsigned char *addr)
       e_printf("\nFindPC: PC=%x\n", G->itree.start+(AP-1)->dnpc);
       return G->itree.start+(AP-1)->dnpc;
   }
+#if SPEC_PREJIT
+  pthread_mutex_unlock(&trees_mtx);
+#endif
   return 0;
 }
 
@@ -541,6 +551,9 @@ static void TraverseAndClean(void)
   if (debug_level('e')) t0 = GETTSC();
 #endif
 
+#if SPEC_PREJIT
+  pthread_mutex_lock(&trees_mtx);
+#endif
   if (Traverser == NULL) {
       Traverser = interval_tree_iter_first(&ITreeRoot, 0, 0xffffffff);
       if (Traverser == NULL) return;
@@ -560,7 +573,7 @@ static void TraverseAndClean(void)
   }
   if (G->alive<=0) {
       if (debug_level('e')>2) e_printf("Delete node %08x\n",G->itree.start);
-      RemoveNode(G);
+      RemoveNode_locked(G);
   }
   else {
       if (debug_level('e')>3)
@@ -568,6 +581,9 @@ static void TraverseAndClean(void)
 		G->itree.start,ninodes,G->alive);
   }
   Traverser = p;
+#if SPEC_PREJIT
+  pthread_mutex_unlock(&trees_mtx);
+#endif
 #if PROFILE >= 2
   if (debug_level('e')) CleanupTime += (GETTSC() - t0);
 #endif
@@ -605,13 +621,9 @@ TNode *Move2Tree(IMeta *I0, CodeBuf *GenCodeBuf)
   if (nG==NULL) {
     leavedos_main(0x8201);
   }
-  pthread_mutex_lock(&trees_mtx);
   nG->itree.start = key;
   nG->itree.last = key + I0->seqlen - 1;
-  interval_tree_insert(&nG->itree, &ITreeRoot);
-  ninodes++;
   nG->alive = NODELIFE(nG);
-  pthread_mutex_unlock(&trees_mtx);
 
   /* transfer info from first node of the Meta list to our new node */
   nG->seqnum = I0->ncount;
@@ -682,6 +694,14 @@ TNode *Move2Tree(IMeta *I0, CodeBuf *GenCodeBuf)
   ap->daddr = apl;
   if (debug_level('e')>8) e_printf("Pmeta %03d:         (%04x)\n",i,apl);
 
+#if SPEC_PREJIT
+  pthread_mutex_lock(&trees_mtx);
+#endif
+  interval_tree_insert(&nG->itree, &ITreeRoot);
+#if SPEC_PREJIT
+  pthread_mutex_unlock(&trees_mtx);
+#endif
+  ninodes++;
 #ifdef DEBUG_LINKER
   CheckLinks();
 #endif
@@ -709,7 +729,13 @@ static TNode *FindTree_tail(int key)
   hitimer_t t0 = 0;
   if (debug_level('e')) t0 = GETTSC();
 #endif
+#if SPEC_PREJIT
+  pthread_mutex_lock(&trees_mtx);
+#endif
   I = interval_tree_iter_first(&ITreeRoot, key, key);
+#if SPEC_PREJIT
+  pthread_mutex_unlock(&trees_mtx);
+#endif
   G = container_of(I, TNode, itree);
 
   if (G->itree.start == key) {
@@ -766,9 +792,7 @@ TNode *FindTree(int key)
   if (!e_querymark(key, 1))
 	return NULL;
 
-  pthread_mutex_lock(&trees_mtx);
   I = FindTree_tail(key);
-  pthread_mutex_unlock(&trees_mtx);
   if (I) {
 	__atomic_store_n(&findtree_cache[key&FINDTREE_CACHE_HASH_MASK], I,
 			 __ATOMIC_RELAXED);
@@ -837,7 +861,7 @@ static int BreakNode(TNode *G, unsigned char *eip)
   return 0;
 }
 
-void RemoveNode(TNode *G)
+static void RemoveNode_locked(TNode *G)
 {
   if (Traverser == &G->itree)
     Traverser = interval_tree_iter_next(Traverser, 0, 0xffffffff);
@@ -849,6 +873,17 @@ void RemoveNode(TNode *G)
   dlfree(G->mblock);
   free(G);
   ninodes--;
+}
+
+void RemoveNode(TNode *G)
+{
+#if SPEC_PREJIT
+  pthread_mutex_lock(&trees_mtx);
+#endif
+  RemoveNode_locked(G);
+#if SPEC_PREJIT
+  pthread_mutex_unlock(&trees_mtx);
+#endif
 }
 
 int InvalidateNodeRange(int al, int len, unsigned char *eip)
@@ -864,7 +899,9 @@ int InvalidateNodeRange(int al, int len, unsigned char *eip)
   ah = al + len - 1;
   if (debug_level('e')>1) dbug_printf("Invalidate area %08x..%08x\n",al,ah+1);
 
+#if SPEC_PREJIT
   pthread_mutex_lock(&trees_mtx);
+#endif
   IntervalTreeNode *p = interval_tree_iter_first(&ITreeRoot, al, ah);
 
   /* walk tree in ascending, hopefully sorted, address order */
@@ -881,7 +918,9 @@ int InvalidateNodeRange(int al, int len, unsigned char *eip)
       p = nextp;
       if (!p) break;
   }
+#if SPEC_PREJIT
   pthread_mutex_unlock(&trees_mtx);
+#endif
   if (debug_level('e') && e_querymark(al, len))
     error("simx86: InvalidateNodeRange did not clear all code for %#08x, len=%x\n",
 	  al, len);
