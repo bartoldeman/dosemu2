@@ -408,10 +408,6 @@ static unsigned int FindExecCode(unsigned int PC)
 			else if (debug_level('e')>2)
 				e_printf("** Found compiled code at %08x\n",PC);
 		}
-		else if (e_querymark(PC, 1)) {
-			/* slow path */
-			InvalidateNodeRange(PC, 1, NULL);
-		}
 		/* future proofing: _Interp86() can't fail now in non-prejit mode
 		   but if it ever does, retry */
 		while (!G) {
@@ -419,12 +415,6 @@ static unsigned int FindExecCode(unsigned int PC)
 				TheCPU.err = EXCP_GOBACK;
 				return PC;
 			}
-#if 0
-			/* this obviously can't happen with current code, but
-			 * slows down execution under debug a lot */
-			if (debug_level('e') && e_querymark(PC, 1))
-				error("simx86: code nodes clashed at %x\n", PC);
-#endif
 			if (debug_level('e')>=9)
 				dbug_printf("\n%s",e_print_regs(LONG_CS));
 			G = _Interp86(PC, LONG_CS, TheCPU.cs, TheCPU.mode, 0);
@@ -541,7 +531,6 @@ void Interp86(void)
 static int interp_post(unsigned int PC, unsigned int Interp_LONG_CS,
 		       const int mode, int flags)
 {
-		int gap = (flags & F_SPRJ) ? SAFE_PRJ_GAP : 1;
 		assert (CurrIMeta>=0);
 
 		if (CEmuStat & CeS_INSTREMUx(PROTMODE())) {
@@ -565,7 +554,8 @@ static int interp_post(unsigned int PC, unsigned int Interp_LONG_CS,
 		if ((mode & MSSTP) ||
 		    (flags & F_LEAV) ||
 		    GL->gen[GL->ngen-1].op >= JMP_TAILCODE ||
-		    e_querymark(PC, gap))
+		    FindTree(PC) ||
+		    ((flags & F_SPRJ) && e_querymark(PC, SAFE_PRJ_GAP)))
 #endif
 		{
 			if (!(flags & F_SPRJ))
