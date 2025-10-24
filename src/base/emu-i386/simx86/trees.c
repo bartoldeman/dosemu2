@@ -54,6 +54,7 @@ IMeta	InstrMeta[MAXINODES];
 int	CurrIMeta = -1;
 
 /* Tree structure to store collected code sequences */
+static IntervalTreeRoot ITreeRoot;
 static avltr_tree CollectTree;
 static avltr_traverser Traverser;
 static int ninodes = 0;
@@ -643,8 +644,29 @@ unsigned int FindPC(const unsigned char *addr)
   TNode *G;
   unsigned char *ahE;
   Addr2Pc *AP;
-  unsigned int i;
+  unsigned int i, PC = 0;
 
+  IntervalTreeNode *inode = interval_tree_iter_first(&ITreeRoot, 0, 0xffffffffu);
+  for (;;) {
+      /* walk to next node */
+      G = container_of(inode, TNode, itree);
+      ahE = G->addr + G->len;
+      if (!ADDR_IN_RANGE(addr,G->addr,ahE)) {
+	inode = interval_tree_iter_next(inode, 0, 0xffffffffu);
+	if (!inode) break;
+	continue;
+      }
+      e_printf("### FindPC: Found node %p->%p..%p", addr,G->addr,ahE);
+      AP = G->pmeta;
+      for (i=0; i<G->seqnum; i++) {
+	  e_printf("     %08x:%p",(G->key+AP->dnpc),G->addr+AP->daddr);
+	  if (addr < G->addr+AP->daddr) break;
+	  AP++;
+      }
+      e_printf("\nFindPC: PC=%x\n", G->key+(AP-1)->dnpc);
+      PC = G->key+(AP-1)->dnpc;
+      break;
+  }
   for (;;) {
       /* walk to next node */
       p = NEXTNODE(p);
@@ -661,6 +683,7 @@ unsigned int FindPC(const unsigned char *addr)
 	  AP++;
       }
       e_printf("\nFindPC: PC=%x\n", G->key+(AP-1)->dnpc);
+      assert(PC==G->key+(AP-1)->dnpc);
       return G->key+(AP-1)->dnpc;
   }
   return 0;
@@ -1109,6 +1132,7 @@ static int TraverseAndClean(void)
 	if (debug_level('e')>2) e_printf("TraverseAndClean: node at %08x decayed\n",G->key);
 	e_unmarkpage(G->key, G->seqlen);
 	NodeUnlinker(G);
+	interval_tree_remove(&G->itree, &ITreeRoot);
       }
   }
   if ((G->addr == NULL) || (G->alive<=0)) {
@@ -1188,6 +1212,9 @@ TNode *Move2Tree(IMeta *I0, CodeBuf *GenCodeBuf)
 	}
 #endif
   }
+  G->itree.start = key;
+  G->itree.last = key + I0->seqlen - 1;
+  interval_tree_insert(&G->itree, &ITreeRoot);
   nG = *found;
   nG->alive = NODELIFE(nG);
   pthread_mutex_unlock(&trees_mtx);
@@ -1283,11 +1310,15 @@ static TNode *FindTree_tail(int key)
 {
   avltr_node *I;
   TNode *G;
+  TNode *G2;
   static int tccount=0;
 #if PROFILE >= 2
   hitimer_t t0 = 0;
   if (debug_level('e')) t0 = GETTSC();
 #endif
+  IntervalTreeNode *itree = interval_tree_iter_first(&ITreeRoot, key, key);
+  G2 = container_of(itree, TNode, itree);
+
   I = CollectTree.root.link[0];
   if (I == NULL) return NULL;	/* always NULL the first time! */
 
@@ -1317,6 +1348,7 @@ static TNode *FindTree_tail(int key)
 #endif
 	}
 #endif
+	assert(G==G2);
 	return G;
   }
 
@@ -1458,9 +1490,10 @@ int InvalidateNodeRange(int al, int len, unsigned char *eip)
 	p = p->link[0];
       }
       else if (G->key < al) {
-        avltr_node *G2;
+        avltr_node *G2, *G3;
 	G2 = p->link[1];
-	if (G2 == &CollectTree.root || G2->data->key > al) {
+	G3 = NEXTNODE(p);
+	if (G2 == &CollectTree.root || G3->data->key > al) {
 	  if (G->alive <= 0) {
 	    /* remove dead node as it may be overlapped by good one */
 	    p = DoDelNode(p);
@@ -1477,10 +1510,24 @@ int InvalidateNodeRange(int al, int len, unsigned char *eip)
 	break;
       }
   }
+  for (;;) {
+      if (p == &CollectTree.root || p->data->key >= ah)
+        break;
+      G = p->data;
+      if (G->addr && (G->alive>0)) {
+	int ahG = G->key + G->seqlen;
+	if (RANGE_INTERSECT(G->key,ahG,al,ah)) break;
+      }
+      p = NEXTNODE(p);
+  }
   if (debug_level('e')>1) e_printf("Invalidate from node %08x on\n",G->key);
+  IntervalTreeNode *inode = interval_tree_iter_first(&ITreeRoot, al, al+len-1);
+  TNode *G2 = container_of(inode, TNode, itree);
+  assert(G==G2);
 
   /* walk tree in ascending, hopefully sorted, address order */
   for (;;) {
+      IntervalTreeNode *nextinode = interval_tree_iter_next(inode, al, al+len-1);
       if (p == &CollectTree.root || p->data->key >= ah)
         break;
       G = p->data;
@@ -1491,6 +1538,7 @@ int InvalidateNodeRange(int al, int len, unsigned char *eip)
 	    if (debug_level('e')>1)
 		dbug_printf("Invalidated node %p at %08x\n",G,G->key);
 	    G->alive = 0;
+	    interval_tree_remove(&G->itree, &ITreeRoot);
 	    e_unmarkpage(G->key, G->seqlen);
 	    NodeUnlinker(G);
 	    cleaned++;
@@ -1514,6 +1562,18 @@ int InvalidateNodeRange(int al, int len, unsigned char *eip)
 	}
       }
       p = NEXTNODE(p);
+      if (nextinode) {
+	for (;;) {
+	  if (p == &CollectTree.root || p->data->key >= ah)
+	    break;
+	  if (p->data->alive>0) break;
+	  p = NEXTNODE(p);
+	}
+	if (p == &CollectTree.root || p->data->key >= ah) continue;
+	G2 = container_of(nextinode, TNode, itree);
+	assert(p->data==G2);
+	inode = nextinode;
+      }
   }
 quit:
   pthread_mutex_unlock(&trees_mtx);

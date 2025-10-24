@@ -42,6 +42,8 @@
 #ifndef _EMU86_TREES_H
 #define _EMU86_TREES_H
 
+#include "interval-tree.h"
+
 /////////////////////////////////////////////////////////////////////////////
 //
 // Tree node key definition.
@@ -125,6 +127,7 @@ typedef struct avltr_node
 
 typedef struct TNode
 {
+	IntervalTreeNode itree;
 /* -------------------------------------------------------------- */
 	int key;		/* signed! and don't move it from here! */
 /* -------------------------------------------------------------- */
