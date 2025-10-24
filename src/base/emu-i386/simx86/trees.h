@@ -117,15 +117,11 @@ extern int TreeCleanups;
 typedef struct TNode
 {
 	IntervalTreeNode itree;
-/* -------------------------------------------------------------- */
-	int key;		/* signed! and don't move it from here! */
-/* -------------------------------------------------------------- */
 	int alive;
 	CodeBuf *mblock;
 	unsigned char *addr;
 	Addr2Pc *pmeta;
-	unsigned short len, flags, seqlen, seqnum __attribute__ ((packed));
-	unsigned short nrefs;
+	unsigned short len, flags, nrefs, seqnum __attribute__ ((packed));
 	linkdesc clink_t;
 	linkdesc clink_nt;
 	unsigned unlinked_jmp_targets;

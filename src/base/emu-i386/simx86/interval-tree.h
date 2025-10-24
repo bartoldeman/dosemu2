@@ -41,9 +41,9 @@ typedef struct IntervalTreeNode
 {
     RBNode rb;
 
-    uint64_t start;    /* Start of interval */
-    uint64_t last;     /* Last location _in_ interval */
-    uint64_t subtree_last;
+    uint32_t start;    /* Start of interval */
+    uint32_t last;     /* Last location _in_ interval */
+    uint32_t subtree_last;
 } IntervalTreeNode;
 
 typedef RBRootLeftCached IntervalTreeRoot;
@@ -87,7 +87,7 @@ void interval_tree_remove(IntervalTreeNode *node, IntervalTreeRoot *root);
  * Returns NULL if no overlap found.
  */
 IntervalTreeNode *interval_tree_iter_first(IntervalTreeRoot *root,
-                                           uint64_t start, uint64_t last);
+                                           uint32_t start, uint32_t last);
 
 /**
  * interval_tree_iter_next:
@@ -100,6 +100,6 @@ IntervalTreeNode *interval_tree_iter_first(IntervalTreeRoot *root,
  * node in the set.
  */
 IntervalTreeNode *interval_tree_iter_next(IntervalTreeNode *node,
-                                          uint64_t start, uint64_t last);
+                                          uint32_t start, uint32_t last);
 
 #endif /* QEMU_INTERVAL_TREE_H */

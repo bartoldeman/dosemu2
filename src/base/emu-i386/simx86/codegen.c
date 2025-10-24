@@ -547,7 +547,7 @@ TNode *Close(unsigned int PC, unsigned int Interp_LONG_CS, int mode,
 	/* mprotect the page here; a page fault will be triggered
 	 * if some other code tries to write over the page including
 	 * this node */
-	e_markpage(G->key, G->seqlen);
+	e_markpage(G->itree.start, G->itree.last - G->itree.start + 1);
 	G->cs = Interp_LONG_CS;
 	G->mode = mode;
 	/* check links INSIDE current node */
@@ -631,7 +631,7 @@ static unsigned ExecOne(TNode *G, unsigned *mem_ref, unsigned long *flg,
 	 * are already handled at the compile stage.
 	 */
 	/* check links FROM LastXNode TO current node */
-	if (*pLastXKey != G->key)
+	if (*pLastXKey != G->itree.start)
 		NodeLinker(FindTree(*pLastXKey), G);
 	ePC = Exec(mem_ref, flg, ecpu, G->addr, G->flags, pLastXKey);
 	if (BrokenMBlock) {
@@ -654,7 +654,7 @@ unsigned int DoExec(TNode *G, unsigned *pLastXKey)
 	unsigned short seqflg = G->flags;
 	int block_inhibit;
 #if defined(SINGLESTEP)
-        unsigned int key = G->key;
+        unsigned int key = G->itree.start;
 #endif
 
 	ecpu = CPUOFFS(0);
@@ -666,7 +666,7 @@ unsigned int DoExec(TNode *G, unsigned *pLastXKey)
 			G->addr,seqflg);
 	}
 #ifdef ASM_DUMP
-	fprintf(aLog,"%p: exec\n",G->key);
+	fprintf(aLog,"%p: exec\n",G->itree.start);
 #endif
 #if PROFILE >= 2
 	hitimer_t TimeStartExec;

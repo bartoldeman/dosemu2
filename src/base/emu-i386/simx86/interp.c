@@ -402,7 +402,7 @@ static unsigned int FindExecCode(unsigned int PC)
 		G = FindTree(PC);
 		if (G) {
 			if (!GoodNode(G)) {
-				InvalidateNodeRange(G->key, G->seqlen, NULL);
+				InvalidateNodeRange(G->itree.start, G->itree.last - G->itree.start + 1, NULL);
 				G = NULL;
 			}
 			else if (debug_level('e')>2)
@@ -429,23 +429,24 @@ static unsigned int FindExecCode(unsigned int PC)
 				dbug_printf("\n%s",e_print_regs(LONG_CS));
 			G = _Interp86(PC, LONG_CS, TheCPU.cs, TheCPU.mode, 0);
 		}
+		unsigned seqlen = G->itree.last - G->itree.start + 1;
 		if (debug_level('e') &&
 				/* check for codemarks inconsistency */
-				e_querymark_all(G->key, G->seqlen) == 0) {
+				e_querymark_all(G->itree.start, seqlen) == 0) {
 			int i, j;
 			error("no mark at %x (%i)\n",
-					G->key,
-					e_querymark(G->key, G->seqlen));
+					G->itree.start,
+					e_querymark(G->itree.start, seqlen));
 			j = -1;
-			for (i = 0; i < G->seqlen; i++) {
-				int mrk = e_querymark(G->key + i, 1);
+			for (i = 0; i < seqlen; i++) {
+				int mrk = e_querymark(G->itree.start + i, 1);
 				error("@%i ", mrk);
 				if (!mrk && j == -1)
 					j = i;
 			}
 			error("@\n");
 			if (j != -1)
-				error("@corrupted at %x\n", G->key + j);
+				error("@corrupted at %x\n", G->itree.start + j);
 		}
 		/* ---- this is the MAIN EXECUTE point ---- */
 		unsigned short seqflg = G->flags;
@@ -455,7 +456,7 @@ static unsigned int FindExecCode(unsigned int PC)
 		if (seqflg & F_PREJ)
 			PrejitNodesExecd++;
 #endif
-		assert(G->seqlen);
+		assert(seqlen);
 #if SPEC_PREJIT
 		if (seqflg & F_SPEC)
 			prejit_run(G);
@@ -2772,7 +2773,7 @@ static void *prejit_thread(void *arg)
     sem_wait(&prejit_sem);
     TNode *G = __atomic_load_n(&prejit_G, __ATOMIC_RELAXED);
     unsigned short ocs = __atomic_load_n(&prejit_cs, __ATOMIC_RELAXED);
-    _PreJit86(G->key + G->seqlen, G->cs, ocs, G->mode, F_PREJ|F_SPRJ);
+    _PreJit86(G->itree.last + 1, G->cs, ocs, G->mode, F_PREJ|F_SPRJ);
     pthread_mutex_lock(&run_mtx);
     prejit_running = 0;
     pthread_mutex_unlock(&run_mtx);
@@ -2784,7 +2785,7 @@ static void *prejit_thread(void *arg)
 #if SPEC_PREJIT
 static void prejit_run(TNode *G)
 {
-  unsigned int PC = G->key + G->seqlen;
+  unsigned int PC = G->itree.last + 1;
   if (debug_level('e')) {
     char *ds;
     unsigned short ocs = TheCPU.cs;

@@ -695,7 +695,7 @@ static void rb_erase_augmented_cached(RBNode *node, RBRootLeftCached *root,
 static bool interval_tree_compute_max(IntervalTreeNode *node, bool exit)
 {
     IntervalTreeNode *child;
-    uint64_t max = node->last;
+    uint32_t max = node->last;
 
     if (node->rb.rb_left) {
         child = rb_to_itree(node->rb.rb_left);
@@ -754,7 +754,7 @@ static const RBAugmentCallbacks interval_tree_augment = {
 void interval_tree_insert(IntervalTreeNode *node, IntervalTreeRoot *root)
 {
     RBNode **link = &root->rb_root.rb_node, *rb_parent = NULL;
-    uint64_t start = node->start, last = node->last;
+    uint32_t start = node->start, last = node->last;
     IntervalTreeNode *parent;
     bool leftmost = true;
 
@@ -794,8 +794,8 @@ void interval_tree_remove(IntervalTreeNode *node, IntervalTreeRoot *root)
  */
 
 static IntervalTreeNode *interval_tree_subtree_search(IntervalTreeNode *node,
-                                                      uint64_t start,
-                                                      uint64_t last)
+                                                      uint32_t start,
+                                                      uint32_t last)
 {
     while (true) {
         /*
@@ -836,7 +836,7 @@ static IntervalTreeNode *interval_tree_subtree_search(IntervalTreeNode *node,
 }
 
 IntervalTreeNode *interval_tree_iter_first(IntervalTreeRoot *root,
-                                           uint64_t start, uint64_t last)
+                                           uint32_t start, uint32_t last)
 {
     IntervalTreeNode *node, *leftmost;
 
@@ -871,7 +871,7 @@ IntervalTreeNode *interval_tree_iter_first(IntervalTreeRoot *root,
 }
 
 IntervalTreeNode *interval_tree_iter_next(IntervalTreeNode *node,
-                                          uint64_t start, uint64_t last)
+                                          uint32_t start, uint32_t last)
 {
     RBNode *rb, *prev;
 

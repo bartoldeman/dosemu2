@@ -239,13 +239,13 @@ static __inline__ int GoodNode(TNode *G)
 	if (G->cs != LONG_CS) {
 		/* CS mismatch can confuse relative jump/call */
 		e_printf("cs mismatch at %08x: old=%x new=%x\n",
-					G->key, G->cs, LONG_CS);
+					G->itree.start, G->cs, LONG_CS);
 		return 0;
 	}
 	if (G->mode != TheCPU.mode) {
 		/* mode mismatch can be 32/16(MBIGCS), MREALA, or MSSTP */
 		e_printf("mode mismatch at %08x: old=%x new=%x\n",
-					G->key, G->mode, TheCPU.mode);
+					G->itree.start, G->mode, TheCPU.mode);
 		return 0;
 	}
 	return 1;

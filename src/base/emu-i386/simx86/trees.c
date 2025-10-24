@@ -120,12 +120,12 @@ unsigned int FindPC(const unsigned char *addr)
       e_printf("### FindPC: Found node %p->%p..%p", addr,G->addr,ahE);
       AP = G->pmeta;
       for (i=0; i<G->seqnum; i++) {
-	  e_printf("     %08x:%p",(G->key+AP->dnpc),G->addr+AP->daddr);
+	  e_printf("     %08x:%p",(G->itree.start+AP->dnpc),G->addr+AP->daddr);
 	  if (addr < G->addr+AP->daddr) break;
 	  AP++;
       }
-      e_printf("\nFindPC: PC=%x\n", G->key+(AP-1)->dnpc);
-      return G->key+(AP-1)->dnpc;
+      e_printf("\nFindPC: PC=%x\n", G->itree.start+(AP-1)->dnpc);
+      return G->itree.start+(AP-1)->dnpc;
   }
   return 0;
 }
@@ -199,12 +199,12 @@ static void linknode(TNode *LG, TNode *G, linkdesc *L, unsigned target_type)
 	backref *B;
 
 	// points to current node, which can't be a forever loop?
-	if (L->target!=G->key || !(LG->unlinked_jmp_targets & target_type) ||
+	if (L->target!=G->itree.start || !(LG->unlinked_jmp_targets & target_type) ||
 	    (G->flags & F_SLFJ))
 		return;
 
 	if (L->ref!=0) {
-		dbug_printf("Linker: ref at %08x busy\n",LG->key);
+		dbug_printf("Linker: ref at %08x busy\n",LG->itree.start);
 		leavedos_main(0x8102 + (target_type == TARGET_NT));
 	}
 	LG->unlinked_jmp_targets &= ~target_type;
@@ -224,7 +224,7 @@ static void linknode(TNode *LG, TNode *G, linkdesc *L, unsigned target_type)
 		if (debug_level('e')>1) {
 			e_printf("Linker: node (%p:%08x:%p) SELF link\n"
 				 "\t\ttarget=%08x, %c_ref %d=%p->%p\n",
-				 G,G->key,G->addr,
+				 G,G->itree.start,G->addr,
 				 L->target, B->branch, G->nrefs, L->ref, *L->ref);
 		}
 	}
@@ -232,8 +232,8 @@ static void linknode(TNode *LG, TNode *G, linkdesc *L, unsigned target_type)
 		e_printf("Linker: previous node (%p:%08x:%p)\n"
 			 "\t\tlinked to (%p:%08x:%p)\n"
 			 "\t\ttarget=%08x, %c_ref %d=%p->%p\n",
-			 LG,LG->key,LG->addr,
-			 G,G->key,G->addr,
+			 LG,LG->itree.start,LG->addr,
+			 G,G->itree.start,G->addr,
 			 L->target, B->branch, G->nrefs, L->ref, *L->ref);
 	}
 	_nodeflagbackrefs(LG, G->flags);
@@ -264,7 +264,7 @@ void NodeLinker(TNode *LG, TNode *G)
 #if PROFILE >= 2
 	if (debug_level('e')) t0 = GETTSC();
 #endif
-	if (debug_level('e')>8 && LG) e_printf("NodeLinker: %08x->%08x\n",LG->key,G->key);
+	if (debug_level('e')>8 && LG) e_printf("NodeLinker: %08x->%08x\n",LG->itree.start,G->itree.start);
 
 	if (LG && LG->alive>0 && LG->unlinked_jmp_targets) {	// node ends with links
 		linknode(LG, G, &LG->clink_t, TARGET_T);
@@ -283,7 +283,7 @@ static void unlinknode(TNode *G, linkdesc *T, char branch)
 	backref *Bq = &H->bkr;
 	backref *B  = H->bkr.next;
 	if (debug_level('e')>2) e_printf("Unlink fwd %c ref to node %p(%08x)\n",
-					 branch, H, H->key);
+					 branch, H, H->itree.start);
 	while (B) {
 		if (*B->ref==G) {
 			Bq->next = B->next;
@@ -336,21 +336,21 @@ static void NodeUnlinker(TNode *G)
 			L = &H->clink_nt;
 		}
 		if (debug_level('e')>2) e_printf("Unlinking %c ref from node %p(%08x) to %08x\n",
-			B->branch, H, L->target, G->key);
-		if (L->target != G->key) {
+			B->branch, H, L->target, G->itree.start);
+		if (L->target != G->itree.start) {
 		    dbug_printf("Unlinker: BK %c ref error t=%08x k=%08x\n",
-			B->branch, L->target, G->key);
+			B->branch, L->target, G->itree.start);
 		    leavedos_main(0x8110);
 		}
 		IGen IG = (IGen){.op = JMP_LINK, .mode = MPATCH,
-				 .p0 = L->target, .p1 = H->key};
+				 .p0 = L->target, .p1 = H->itree.start};
 		CodeGen(H->addr + L->link, H->addr, &IG);
 		L->ref = NULL; H->unlinked_jmp_targets |= target_type;
 		G->nrefs--;
 	    }
 	    else {
 		e_printf("Invalid unlink [%c] ref %p from node ?(?) to %08x\n",
-			B->branch, B->ref, G->key);
+			B->branch, B->ref, G->itree.start);
 		leavedos_main(0x8116);
 	    }
 	    B = B->next;
@@ -442,7 +442,7 @@ static void CheckLinks(void)
 	e_printf("Node %p invalidated\n",G);
 	continue;
     }
-    if (debug_level('e')>5) e_printf("Node %p at %08x selfr=%p\n",G,G->key,
+    if (debug_level('e')>5) e_printf("Node %p at %08x selfr=%p\n",G,G->itree.start,
 	G->mblock->bkptr);
     if (G->mblock->bkptr != G) {
 	error("bad selfref\n"); goto nquit;
@@ -484,10 +484,10 @@ static void DumpTree (FILE *fd)
 	continue;
     }
     fprintf(fd,"%04d Node %p at %08x..%08x mblock=%p flags=%#x\n",
-	nn,G,G->key,(G->key+G->seqlen-1),G->mblock,G->flags);
+	nn,G,G->itree.start,G->itree.last,G->mblock,G->flags);
     fprintf(fd,"     AVL (%p:%p),%d,%d,%d,%d\n",G->link[0],G->link[1],
 		G->bal,G->cache,G->pad,G->rtag);
-    fprintf(fd,"     source:     instr=%d, len=%#x\n",G->seqnum,G->seqlen);
+    fprintf(fd,"     source:     instr=%d, len=%#x\n",G->seqnum,G->itree.last-G->itree.start+1);
     fprintf(fd,"     translated: len=%#x\n",G->len);
     L = &G->clink_t;
     fprintf(fd,"     LINK refs=%d\n",G->nrefs);
@@ -512,7 +512,7 @@ static void DumpTree (FILE *fd)
 	unsigned char *p = G->addr;
 	Addr2Pc *AP = G->pmeta;
 	for (i=0; i<G->seqnum; i++) {
-	    fprintf(fd,"     %08x:%p",(G->key+AP->dnpc),G->addr+AP->daddr);
+	    fprintf(fd,"     %08x:%p",(G->itree.start+AP->dnpc),G->addr+AP->daddr);
 	    k = 0;
 	    for (j=0; j<(AP[1].daddr-AP->daddr); j++) {
 		fprintf(fd," %02x",*p++); k++;
@@ -565,12 +565,12 @@ static int TraverseAndClean(void)
   if ((G->addr != NULL) && (G->alive>0)) {
       G->alive -= AGENODE;
       if (G->alive <= 0) {
-	if (debug_level('e')>2) e_printf("TraverseAndClean: node at %08x decayed\n",G->key);
+	if (debug_level('e')>2) e_printf("TraverseAndClean: node at %08x decayed\n",G->itree.start);
       }
   }
   if ((G->addr == NULL) || (G->alive<=0)) {
-      if (debug_level('e')>2) e_printf("Delete node %08x\n",G->key);
-      e_unmarkpage(G->key, G->seqlen);
+      if (debug_level('e')>2) e_printf("Delete node %08x\n",G->itree.start);
+      e_unmarkpage(G->itree.start, G->itree.last - G->itree.start + 1);
       NodeUnlinker(G);
       interval_tree_remove(&G->itree, &ITreeRoot);
       dlfree(G->mblock);
@@ -580,7 +580,7 @@ static int TraverseAndClean(void)
   else {
       if (debug_level('e')>3)
 	e_printf("TraverseAndClean: node at %08x of %d life=%d\n",
-		G->key,ninodes,G->alive);
+		G->itree.start,ninodes,G->alive);
   }
   Traverser = p;
 #if PROFILE >= 2
@@ -621,7 +621,6 @@ TNode *Move2Tree(IMeta *I0, CodeBuf *GenCodeBuf)
   if (nG==NULL) {
     leavedos_main(0x8201);
   }
-  nG->key = key;
   pthread_mutex_lock(&trees_mtx);
   nG->itree.start = key;
   nG->itree.last = key + I0->seqlen - 1;
@@ -630,7 +629,6 @@ TNode *Move2Tree(IMeta *I0, CodeBuf *GenCodeBuf)
   pthread_mutex_unlock(&trees_mtx);
 
   /* transfer info from first node of the Meta list to our new node */
-  nG->seqlen = I0->seqlen;
   nG->seqnum = I0->ncount;
 #if PROFILE
   if (debug_level('e')) if (nG->len > MaxNodeSize) MaxNodeSize = nG->len;
@@ -726,7 +724,7 @@ static TNode *FindTree_tail(int key)
   I = interval_tree_iter_first(&ITreeRoot, key, key);
   G = container_of(I, TNode, itree);
 
-  if (G->addr && (G->alive>0) && G->key == key) {
+  if (G->addr && (G->alive>0) && G->itree.start == key) {
 	if (debug_level('e')>3) e_printf("Found key %08x\n",key);
 	G->alive = NODELIFE(G);
 #if PROFILE
@@ -766,7 +764,7 @@ TNode *FindTree(int key)
      ~99.99% success rate */
   I = __atomic_load_n(&findtree_cache[key&FINDTREE_CACHE_HASH_MASK],
 		      __ATOMIC_RELAXED);
-  if (I && (I->alive>0) && (I->key==key)) {
+  if (I && (I->alive>0) && (I->itree.start==key)) {
 	if (debug_level('e')) {
 	    if (debug_level('e')>4)
 		e_printf("Found key %08x via cache\n", key);
@@ -814,24 +812,24 @@ static void BreakNode(TNode *G, unsigned char *eip)
   int i;
 
   if (eip==0) {
-	dbug_printf("Cannot break node %08x, eip=%p\n",G->key,eip);
+	dbug_printf("Cannot break node %08x, eip=%p\n",G->itree.start,eip);
 	leavedos_main(0x7691);
   }
 
   ebase = eip - G->addr;
   for (i=0; i<G->seqnum; i++) {
     if (A->daddr >= ebase) {		// found following instr
-	IGen IG = (IGen){.op = JMP_TAILCODE, .p0 = G->key + A->dnpc};
+	IGen IG = (IGen){.op = JMP_TAILCODE, .p0 = G->itree.start + A->dnpc};
 	p = G->addr + A->daddr;		// translated IP of following instr
 	CodeGen(p, G->addr, &IG);
 	if (debug_level('e')>1)
 		e_printf("============ Force node closing at %08x(%p)\n",
-			 (G->key+A->dnpc),p);
+			 (G->itree.start+A->dnpc),p);
 	return;
     }
     A++;
   }
-  e_printf("============ Node %08x break failed\n",G->key);
+  e_printf("============ Node %08x break failed\n",G->itree.start);
 }
 
 int InvalidateNodeRange(int al, int len, unsigned char *eip)
@@ -855,16 +853,16 @@ int InvalidateNodeRange(int al, int len, unsigned char *eip)
       IntervalTreeNode *nextp = interval_tree_iter_next(p, al, al+len-1);
       G = container_of(p, TNode, itree);
       if (G->addr && (G->alive>0)) {
-	int ahG = G->key + G->seqlen;
-	if (RANGE_INTERSECT(G->key,ahG,al,ah)) {
+	int ahG = G->itree.last + 1;
+	if (RANGE_INTERSECT(G->itree.start,ahG,al,ah)) {
 	    unsigned char *ahE;
 	    if (debug_level('e')>1)
-		dbug_printf("Invalidated node %p at %08x\n",G,G->key);
+		dbug_printf("Invalidated node %p at %08x\n",G,G->itree.start);
 	    G->alive = 0;
 	    interval_tree_remove(&G->itree, &ITreeRoot);
-	    __atomic_store_n(&findtree_cache[G->key&FINDTREE_CACHE_HASH_MASK],
+	    __atomic_store_n(&findtree_cache[G->itree.start&FINDTREE_CACHE_HASH_MASK],
 			     NULL, __ATOMIC_RELAXED);
-	    e_unmarkpage(G->key, G->seqlen);
+	    e_unmarkpage(G->itree.start, G->itree.last - G->itree.start + 1);
 	    NodeUnlinker(G);
 	    cleaned++;
 	    /* if the current eip is in *any* chunk of code that is deleted
