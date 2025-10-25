@@ -33,6 +33,9 @@
  * On some architectures, qatomic_set_mb is more efficient than a store
  * plus a fence.
  */
+#ifndef __has_feature
+#define __has_feature(x) 0 /* compatibility with non-clang compilers */
+#endif
 #if defined(__SANITIZE_THREAD__) || __has_feature(thread_sanitizer)
 # define SANITIZE_THREAD 1
 #endif
