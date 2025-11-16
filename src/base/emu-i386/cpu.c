@@ -279,11 +279,6 @@ static void fpu_reset(void)
 
 static int fpu_ignne;
 
-int fpu_get_ignne(void)
-{
-  return fpu_ignne;
-}
-
 static Bit8u fpu_io_read(ioport_t port, void *arg)
 {
   return 0xff;
@@ -325,7 +320,7 @@ static int fpu_is_masked(void)
     return ((imr[0] & 4) || !!(real_imr & (1 << 13)));
 }
 
-void raise_fpu_irq(void)
+static void raise_fpu_irq(void)
 {
   if (fpu_is_masked() || !isset_IF_async()) {
     error("FPU IRQ cannot be injected (%i %i), bye\n",
@@ -333,6 +328,61 @@ void raise_fpu_irq(void)
     leavedos(2);
   }
   pic_request(13);
+}
+
+void fpu_fpe_handler (unsigned char *csp, cpuctx_t *scp)
+{
+  if (fpu_ignne) {
+    /* do some basic emulation:
+       we only deal with control FPU instructions,
+       non-control FPU instructions always cause an exception
+    */
+    if (csp[0] == 0x9b) csp++; // wait
+    if (csp[0] >= 0xd8 && csp[0] <= 0xdf) {
+      int exop = (csp[1] & 0x38) | (csp[0] & 7); // same as interp.c
+      if (exop == 0x63 || exop == 0x67)
+	exop |= ((csp[1] & 7) << 8);
+      if ((csp[1]&0xc0)==0xc0) exop |= 0x40;
+      switch (exop) {
+      case 0x31: //fstenv
+      case 0x35: //fsave
+      case 0x0263: //fclex
+      case 0x0363: //finit
+	fpu_ignne = 0;
+	dbug_printf("FPU_IGNNE set to %x\n", fpu_ignne);
+	/* fall through */
+      case 0x39: //fstcw
+      case 0x3d: //fstsw
+      case 0x0063: //fneni
+      case 0x0163: //fndisi
+      case 0x0463: //fnsetpm
+      case 0x0067: //fstsw %ax
+	assert(csp[-1] == 0x9b);
+	dbug_printf("coprocessor exception, skipping WAIT because of IGNNE#\n");
+	if (scp)
+	  _eip ++;
+	else
+	  LWORD(eip) ++;
+	return;
+      case 0x21: //fldenv
+      case 0x25: //frstor
+	fpu_ignne = 0;
+	dbug_printf("FPU_IGNNE set to %x\n", fpu_ignne);
+	/* fall through */
+      case 0x29: //fldcw
+	dbug_printf("coprocessor exception, disabling CW load exception because of IGNNE#\n");
+	vm86_fpu_state.cwd = 0x37f;
+	if (config.cpu_vm == CPUVM_KVM || config.cpu_vm_dpmi == CPUVM_KVM)
+	  kvm_update_fpu();
+	if (config.cpu_vm == CPUVM_EMU || config.cpu_vm_dpmi == CPUVM_EMU)
+	  cpuemu_update_fpu();
+	return;
+      }
+    }
+  }
+
+  dbug_printf("coprocessor exception, calling IRQ13\n");
+  raise_fpu_irq();
 }
 
 /*

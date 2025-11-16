@@ -5972,19 +5972,7 @@ out:
       }
     }
     else if (_trapno == 0x10) {
-      if (fpu_get_ignne()) {
-	if (csp[0] == 0x9b &&
-	    ((csp[1] == 0xdf && csp[2] == 0xe0) || // fstsw
-	     (csp[1] == 0xdb && csp[2] == 0xe2))) { // fclex
-	  dbug_printf("coprocessor exception, skipping WAIT because of IGNNE#\n");
-	  if (csp[1] == 0xdb) // fclex
-	    port_outb(0xf0, 0);
-	  _eip++;
-	  return ret;
-	}
-      }
-      dbug_printf("coprocessor exception, calling IRQ13\n");
-      raise_fpu_irq();
+      fpu_fpe_handler(csp, scp);
       return ret;
     }
 
