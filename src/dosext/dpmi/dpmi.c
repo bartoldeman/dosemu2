@@ -5008,8 +5008,29 @@ static void return_from_hwint(cpuctx_t *scp, void * const sp)
   /* w/a for DJGPP, see
    * https://github.com/dosemu2/dosemu2/pull/2687
    */
-  if (inum == 0x75)
-    port_outb(0xf2, 0);
+  if (inum == 0x75) {
+    if (DPMI_CLIENT.is_32 &&
+        GetSegmentLimit(_ss) == 0xfff &&
+        GetSegmentType(_ss) == MODIFY_LDT_CONTENTS_DATA &&
+        _esp > 0xfff) {
+      if (config.cpu_vm_dpmi == CPUVM_KVM)
+        kvm_get_fpu();
+      if (vm86_fpu_state.swd & 0x80) { // FPUS_ES
+        // this is where we work around DJGPP: the iret back
+        // into the faulting FPU op is converted into an
+        // exception.
+        // Normally we would get a stack fault or
+        // similar but we pre-empt it here, also because
+        // cpuemu has limited support for segment limits.
+        D_printf("DPMI: redirecting irq13 to exc10 for DJGPP\n");
+        scp->trapno = 0x10;
+        do_cpu_exception(scp);
+      }
+    }
+    else {
+      port_outb(0xf2, 0);
+    }
+  }
 #ifdef USE_MHPDBG
   /* allow tracing from PM hwints */
   if (mhpdbg.active && tf)
@@ -5951,6 +5972,17 @@ out:
       }
     }
     else if (_trapno == 0x10) {
+      if (fpu_get_ignne()) {
+	if (csp[0] == 0x9b &&
+	    ((csp[1] == 0xdf && csp[2] == 0xe0) || // fstsw
+	     (csp[1] == 0xdb && csp[2] == 0xe2))) { // fclex
+	  dbug_printf("coprocessor exception, skipping WAIT because of IGNNE#\n");
+	  if (csp[1] == 0xdb) // fclex
+	    port_outb(0xf0, 0);
+	  _eip++;
+	  return ret;
+	}
+      }
       dbug_printf("coprocessor exception, calling IRQ13\n");
       raise_fpu_irq();
       return ret;

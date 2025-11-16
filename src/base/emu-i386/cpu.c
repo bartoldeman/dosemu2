@@ -278,7 +278,11 @@ static void fpu_reset(void)
 }
 
 static int fpu_ignne;
-static int fpu_orig_mask;
+
+int fpu_get_ignne(void)
+{
+  return fpu_ignne;
+}
 
 static Bit8u fpu_io_read(ioport_t port, void *arg)
 {
@@ -287,25 +291,13 @@ static Bit8u fpu_io_read(ioport_t port, void *arg)
 
 static void fpu_io_write(ioport_t port, Bit8u val, void *arg)
 {
-  int old_ignne = fpu_ignne;
-  int mask = old_ignne ? fpu_orig_mask : (vm86_fpu_state.cwd & 0x7f);
-
   switch (port) {
   case 0xf0:
     pic_untrigger(13);
-    /* don't trust bit7 (ES) as it may be suppressed by our fake IGNNE,
-     * which is actually an exception mask in CWD */
-    fpu_ignne = !!(vm86_fpu_state.swd & 0x7f & ~mask);
+    fpu_ignne = !!(vm86_fpu_state.swd & 0x80);
     /* Note: we emuate the "unrecommended" (by Intel) design where the
      * untriggering of IGNNE requires an extra write to 0xf0 after fnclex */
-    if (fpu_ignne) {
-      if (!old_ignne)
-        fpu_orig_mask = mask;
-      vm86_fpu_state.cwd |= 0x7f;
-    } else if (old_ignne) {
-      vm86_fpu_state.cwd &= ~0x7f;
-      vm86_fpu_state.cwd |= mask;
-    }
+    dbug_printf("FPU_IGNNE set to %x\n", fpu_ignne);
     break;
   case 0xf1:
     fpu_reset();
@@ -314,19 +306,16 @@ static void fpu_io_write(ioport_t port, Bit8u val, void *arg)
   case 0xf2:
     if (fpu_ignne) {
       fpu_ignne = 0;
-      /* restore mask */
-      vm86_fpu_state.cwd &= ~0x7f;
-      vm86_fpu_state.cwd |= mask;
       /* fnclex */
       vm86_fpu_state.swd &= 0x7f00;
+      dbug_printf("FPU_IGNNE set to %x\n", fpu_ignne);
+      if (config.cpu_vm == CPUVM_KVM || config.cpu_vm_dpmi == CPUVM_KVM)
+        kvm_update_fpu();
+      if (config.cpu_vm == CPUVM_EMU || config.cpu_vm_dpmi == CPUVM_EMU)
+        cpuemu_update_fpu();
     }
     break;
   }
-
-  if (config.cpu_vm == CPUVM_KVM || config.cpu_vm_dpmi == CPUVM_KVM)
-    kvm_update_fpu();
-  if (config.cpu_vm == CPUVM_EMU || config.cpu_vm_dpmi == CPUVM_EMU)
-    cpuemu_update_fpu();
 }
 
 static int fpu_is_masked(void)
