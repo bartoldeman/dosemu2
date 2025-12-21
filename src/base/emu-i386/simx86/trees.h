@@ -103,23 +103,12 @@ extern int EmuSignals;
 extern int NodesFound;
 extern int TreeCleanups;
 
-typedef struct avltr_node
-{
-/* ----- Structure for a node in a right-threaded AVL tree. ----- */
-    struct TNode *data;		/* Pointer to data. */
-    struct avltr_node *link[2];	/* Subtrees or threads. */
-    signed char bal;		/* Balance factor. */
-    char cache;			/* Used during insertion. */
-    char pad;			/* Reserved for fully threaded trees. */
-    signed char rtag;		/* Right thread tag. */
-    struct ulist_ent list;
-} avltr_node;
-
 typedef struct TNode
 {
 /* -------------------------------------------------------------- */
 	int key;		/* signed! and don't move it from here! */
 /* -------------------------------------------------------------- */
+	struct TNode *next;
 	int alive;
 	unsigned char *addr;
 	unsigned short len, flags, seqlen, seqnum __attribute__ ((packed));
@@ -130,24 +119,6 @@ typedef struct TNode
 	unsigned mode;
 	Addr2Pc meta[]; /* there are seqnum+1 of these */
 } TNode;
-
-/* Used for traversing a right-threaded AVL tree. */
-typedef struct avltr_traverser
-{
-    int init;				/* Initialized? */
-    struct avltr_node *p;		/* Last node returned. */
-} avltr_traverser;
-
-/* Structure which holds information about a threaded AVL tree. */
-typedef struct avltr_tree
-{
-    struct avltr_node root;	/* Tree root node. */
-    int count;			/* Number of nodes in the tree. */
-} avltr_tree;
-
-/* Tag types. */
-#define PLUS +1
-#define MINUS -1
 
 TNode *FindTree(int key);
 void Move2Tree(TNode *G);

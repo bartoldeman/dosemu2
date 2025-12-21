@@ -30,13 +30,6 @@
  *  (linux/arch/i386/kernel/vm86.c). This code originally was written by
  *  Linus Torvalds with later enhancements by Lutz Molgedey and Hans Lermen.
  *
- * 2. The tree handling routines were adapted from libavl:
- *  libavl - manipulates AVL trees.
- *  Copyright (C) 1998, 1999 Free Software Foundation, Inc.
- *  The author may be contacted at <pfaffben@pilot.msu.edu> on the
- *  Internet, or as Ben Pfaff, 12167 Airport Rd, DeWitt MI 48820, USA
- *  through more mundane means.
- *
  ***************************************************************************/
 
 #include <pthread.h>
@@ -48,9 +41,10 @@ IMeta	InstrMeta[MAXINODES];
 int	CurrIMeta;
 unsigned char *BrokenCodePtr;
 
-/* Tree structure to store collected code sequences */
-static avltr_tree CollectTree;
-static avltr_traverser Traverser;
+static struct {
+	int init;
+	TNode *p;
+} Traverser;
 static int ninodes = 0;
 #if SPEC_PREJIT
 static pthread_mutex_t trees_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -84,12 +78,10 @@ int TreeCleanups = 0;
 static void DumpTree (FILE *fd);
 #endif
 
-#define FINDTREE_CACHE_HASH_MASK 0xfff
+#define FINDTREE_CACHE_HASH_MASK 0xffff
 static TNode *findtree_cache[FINDTREE_CACHE_HASH_MASK+1];
 
-static struct ulist_head TNodePool;
-static avltr_node *TNodePoolPtr;
-static int NodeLimit = 10000;
+static int NodeLimit = 40000;
 
 TNode *FindTree_unlocked(int key);
 
@@ -100,10 +92,19 @@ TNode *FindTree_unlocked(int key);
 
 /////////////////////////////////////////////////////////////////////////////
 
-#define NEXTNODE(g)	({__typeof__(g) _g = (g)->link[1]; \
-			  if ((g)->rtag == PLUS) \
-			    while (_g->link[0]!=NULL) _g=_g->link[0]; \
-			  _g; })
+static inline TNode *NEXTNODE(TNode *G)
+{
+  TNode *next = G;
+  if (G)
+    next = G->next;
+  if (next == NULL) {
+    int hash = G ? ((G->key + 1) & FINDTREE_CACHE_HASH_MASK) : 0;
+    if (G == NULL || hash) do {
+      next = findtree_cache[hash++];
+    } while (next == NULL && hash <= FINDTREE_CACHE_HASH_MASK);
+  }
+  return next;
+}
 
 static TNode *find_node(unsigned a, int l)
 {
@@ -127,449 +128,60 @@ static TNode *find_node_start(unsigned a, int l)
   return ret;
 }
 
-static inline avltr_node *Tmalloc(void)
-{
-  avltr_node *G = ulist_first_entry(&TNodePool, avltr_node, list);
-  ulist_del(&G->list);
-  if (ulist_empty(&TNodePool)) {
-    pthread_mutex_unlock_trees();
-    leavedos_main(0x4c4c); // return NULL;
-  }
-//  memset(G, 0, sizeof(avltr_node));	// "bug covering"
-  return G;
-}
-
-static inline void Tfree(avltr_node *p)
-{
-  p->data = NULL;
-  ulist_add(&p->list, &TNodePool);
-}
-
 /////////////////////////////////////////////////////////////////////////////
 
-static TNode **avltr_probe (TNode *item)
+static void chained_hash_insert(TNode *item)
 {
-  avltr_tree *tree = &CollectTree;
-  avltr_node *t;
-  avltr_node *s, *p, *q, *r;
-  int k = 1;
-  const int key = item->key;
-
-  t = &tree->root;
-  s = p = t->link[0];
-
-  if (s == NULL) {
-      tree->count++;
-      ninodes = tree->count;
-      q = t->link[0] = Tmalloc();
-      q->data = item;
-      q->link[0] = NULL;
-      q->link[1] = t;
-      q->rtag = MINUS;
-      q->bal = 0;
-      return &q->data;
-  }
-
-  for (;;) {
-      int diff = (key - p->data->key);
-
-      if (diff < 0) {
-	  p->cache = 0;
-	  q = p->link[0];
-	  if (q == NULL) {
-	      q = Tmalloc();
-	      p->link[0] = q;
-	      q->link[0] = NULL;
-	      q->link[1] = p;
-	      q->rtag = MINUS;
-	      break;
-	  }
-      }
-      else if (diff > 0) {
-	  p->cache = 1;
-	  q = p->link[1];
-	  if (p->rtag == MINUS) {
-	      q = Tmalloc();
-	      q->link[1] = p->link[1];
-	      q->rtag = p->rtag;
-	      p->link[1] = q;
-	      p->rtag = PLUS;
-	      q->link[0] = NULL;
-	      break;
-	  }
-      }
-      else {	/* found */
-	return &p->data;
-      }
-
-      if (q->bal != 0) t = p, s = q;
-      p = q;
-      k++;
-/**/if (k>=AVL_MAX_HEIGHT) {
-      pthread_mutex_unlock_trees();
-      leavedos_main(0x777);
-    }
-#if PROFILE
-      if (debug_level('e')) if (k>MaxDepth) MaxDepth=k;
-#endif
-  }
-
-  tree->count++;
-  ninodes = tree->count;
+  const int hash = item->key & FINDTREE_CACHE_HASH_MASK;
+  item->next = findtree_cache[hash];
+  findtree_cache[hash] = item;
+  ninodes++;
 #if PROFILE
   if (debug_level('e')) if (ninodes > MaxNodes) MaxNodes = ninodes;
 #endif
-  q->data = item;
-  q->bal = 0;
-
-  r = p = s->link[(int) s->cache];
-  while (p != q) {
-      p->bal = p->cache * 2 - 1;
-      p = p->link[(int) p->cache];
-  }
-
-  if (s->cache == 0) {
-      if (s->bal == 0) {
-	  s->bal = -1;
-	  return &q->data;
-      }
-      else if (s->bal == +1) {
-	  s->bal = 0;
-	  return &q->data;
-      }
-
-      if (r->bal == -1)	{
-	  p = r;
-	  if (r->rtag == MINUS) {
-	      s->link[0] = NULL;
-	      r->link[1] = s;
-	      r->rtag = PLUS;
-	  }
-	  else {
-	      s->link[0] = r->link[1];
-	      r->link[1] = s;
-	  }
-	  s->bal = r->bal = 0;
-      }
-      else {
-	  p = r->link[1];
-	  r->link[1] = p->link[0];
-	  p->link[0] = r;
-	  s->link[0] = p->link[1];
-	  p->link[1] = s;
-	  if (p->bal == -1) s->bal = 1, r->bal = 0;
-	    else if (p->bal == 0) s->bal = r->bal = 0;
-	      else s->bal = 0, r->bal = -1;
-	  p->bal = 0;
-	  p->rtag = PLUS;
-	  if (s->link[0] == s) s->link[0] = NULL;
-	  if (r->link[1] == NULL) {
-	      r->link[1] = p;
-	      r->rtag = MINUS;
-	  }
-      }
-  }
-  else {
-      if (s->bal == 0) {
-	  s->bal = 1;
-	  return &q->data;
-      }
-      else if (s->bal == -1) {
-	  s->bal = 0;
-	  return &q->data;
-      }
-
-      if (r->bal == +1)	{
-	  p = r;
-	  if (r->link[0] == NULL) {
-	      s->rtag = MINUS;
-	      r->link[0] = s;
-	  }
-	  else {
-	      s->link[1] = r->link[0];
-	      s->rtag = PLUS;
-	      r->link[0] = s;
-	  }
-	  s->bal = r->bal = 0;
-      }
-      else {
-	  p = r->link[0];
-	  r->link[0] = p->link[1];
-	  p->link[1] = r;
-	  s->link[1] = p->link[0];
-	  p->link[0] = s;
-	  if (p->bal == +1) s->bal = -1, r->bal = 0;
-	    else if (p->bal == 0) s->bal = r->bal = 0;
-	      else s->bal = 0, r->bal = 1;
-	  p->rtag = PLUS;
-	  if (s->link[1] == NULL) {
-	      s->link[1] = p;
-	      s->rtag = MINUS;
-	  }
-	  if (r->link[0] == r) r->link[0] = NULL;
-	  p->bal = 0;
-      }
-  }
-
-  if (t != &tree->root && s == t->link[1]) t->link[1] = p;
-    else t->link[0] = p;
-
-  return &q->data;
 }
 
 
-static TNode *avltr_delete(const int key)
+static void chained_hash_delete(TNode *item)
 {
-  avltr_tree *tree = &CollectTree;
-  avltr_node *pa[AVL_MAX_HEIGHT];	/* Stack P: Nodes. */
-  unsigned char a[AVL_MAX_HEIGHT];	/* Stack P: Bits. */
-  int k = 1;				/* Stack P: Pointer. */
-  avltr_node *p;
-  TNode *G;
-
-  a[0] = 0;
-  pa[0] = &tree->root;
-  p = tree->root.link[0];
-  if (p == NULL) return NULL;
-
-  for (;;) {
-      int diff = (key - p->data->key);
-
-      if (diff==0) break;
-      pa[k] = p;
-      if (diff < 0) {
-	  if (p->link[0] == NULL) return NULL;
-	  p = p->link[0]; a[k] = 0;
-      }
-      else if (diff > 0) {
-	  if (p->rtag != PLUS) return NULL;
-	  p = p->link[1]; a[k] = 1;
-      }
-      k++;
-/**/  if (k>=AVL_MAX_HEIGHT) {
-        pthread_mutex_unlock_trees();
-        leavedos_main(0x777);
-      }
+  const int key = item->key;
+  TNode **p = &findtree_cache[key & FINDTREE_CACHE_HASH_MASK];
+  TNode *G = *p;
+  if (G != item) {
+    while (G->next != item)
+      G = G->next;
+    p = &G->next;
   }
+  *p = item->next;
+
+/**/ if (Traverser.p==item) Traverser.init=0;
 #if !defined(SINGLESTEP)&&!defined(SINGLEBLOCK)
   if (debug_level('e')>2)
-	e_printf("Found node to delete at %p(%08x)\n",p,p->data->key);
+       e_printf("Found node to delete at %p(%08x)\n",item,item->key);
 #endif
-  tree->count--;
-  ninodes = tree->count;
-
-  G = p->data;
-
-  {
-    avltr_node *t = p;
-    avltr_node **q = &pa[k - 1]->link[(int) a[k - 1]];
-
-    if (t->rtag == MINUS) {
-	if (t->link[0] != NULL) {
-	    avltr_node *const x = t->link[0];
-
-	    *q = x;
-	    (*q)->bal = 0;
-	    if (x->rtag == MINUS) {
-		if (a[k - 1] == 1) x->link[1] = t->link[1];
-		  else x->link[1] = pa[k - 1];
-	    }
-	}
-	else {
-	    *q = t->link[a[k - 1]];
-	    if (a[k - 1] == 0) pa[k - 1]->link[0] = NULL;
-	      else pa[k - 1]->rtag = MINUS;
-	}
-    }
-    else {
-	avltr_node *r = t->link[1];
-	if (r->link[0] == NULL) {
-	    r->link[0] = t->link[0];
-	    r->bal = t->bal;
-	    if (r->link[0] != NULL) {
-		avltr_node *s = r->link[0];
-		while (s->rtag == PLUS) s = s->link[1];
-		s->link[1] = r;
-	    }
-	    *q = r;
-	    a[k] = 1;
-	    pa[k++] = r;
-	}
-	else {
-	    avltr_node *s = r->link[0];
-
-	    a[k] = 1;
-	    pa[k++] = t;
-
-	    a[k] = 0;
-	    pa[k++] = r;
-
-	    while (s->link[0] != NULL) {
-		r = s;
-		s = r->link[0];
-		a[k] = 0;
-		pa[k++] = r;
-	    }
-
-	    t->data = s->data;
-/* e_printf("<03 node exchange %p->%p>\n",s,t); */
-
-	    if (s->rtag == PLUS) r->link[0] = s->link[1];
-	      else r->link[0] = NULL;
-	    p = s;
-	}
-    }
-  }
-
-/**/ if (Traverser.p==p) Traverser.init=0;
-#if !defined(SINGLESTEP)&&!defined(SINGLEBLOCK)
-  if (debug_level('e')>2) e_printf("Remove node %p\n",p);
-#endif
-  Tfree(p);
-
-  while (--k) {
-      avltr_node *const s = pa[k];
-
-      if (a[k] == 0) {
-	  avltr_node *const r = s->link[1];
-
-	  if (s->bal == -1) {
-	      s->bal = 0;
-	      continue;
-	  }
-	  else if (s->bal == 0) {
-	      s->bal = +1;
-	      break;
-	  }
-
-	  if (s->rtag == MINUS || r->bal == 0) {
-	      s->link[1] = r->link[0];
-	      r->link[0] = s;
-	      r->bal = -1;
-	      pa[k - 1]->link[(int) a[k - 1]] = r;
-	      break;
-	  }
-	  else if (r->bal == +1) {
-	      if (r->link[0] != NULL) {
-		  s->rtag = PLUS;
-		  s->link[1] = r->link[0];
-	      }
-	      else
-		s->rtag = MINUS;
-	      r->link[0] = s;
-	      s->bal = r->bal = 0;
-	      pa[k - 1]->link[a[k - 1]] = r;
-	  }
-	  else {
-	      p = r->link[0];
-	      if (p->rtag == PLUS) r->link[0] = p->link[1];
-	        else r->link[0] = NULL;
-	      p->link[1] = r;
-	      p->rtag = PLUS;
-	      if (p->link[0] == NULL) {
-		  s->link[1] = p;
-		  s->rtag = MINUS;
-	      }
-	      else {
-		  s->link[1] = p->link[0];
-		  s->rtag = PLUS;
-	      }
-	      p->link[0] = s;
-	      if (p->bal == +1)	s->bal = -1, r->bal = 0;
-	        else if (p->bal == 0) s->bal = r->bal = 0;
-		  else s->bal = 0, r->bal = +1;
-	      p->bal = 0;
-	      pa[k - 1]->link[(int) a[k - 1]] = p;
-	      if (a[k - 1] == 1) pa[k - 1]->rtag = PLUS;
-	  }
-      }
-      else {
-	  avltr_node *const r = s->link[0];
-
-	  if (s->bal == +1) {
-	      s->bal = 0;
-	      continue;
-	  }
-	  else if (s->bal == 0) {
-	      s->bal = -1;
-	      break;
-	  }
-
-	  if (s->link[0] == NULL || r->bal == 0) {
-	      s->link[0] = r->link[1];
-	      r->link[1] = s;
-	      r->bal = +1;
-	      pa[k - 1]->link[(int) a[k - 1]] = r;
-	      break;
-	  }
-	  else if (r->bal == -1) {
-	      if (r->rtag == PLUS) s->link[0] = r->link[1];
-	        else s->link[0] = NULL;
-	      r->link[1] = s;
-	      r->rtag = PLUS;
-	      s->bal = r->bal = 0;
-	      pa[k - 1]->link[a[k - 1]] = r;
-	  }
-	  else {
-	      p = r->link[1];
-	      if (p->link[0] != NULL) {
-		  r->rtag = PLUS;
-		  r->link[1] = p->link[0];
-	      }
-	      else
-		r->rtag = MINUS;
-	      p->link[0] = r;
-	      if (p->rtag == MINUS) s->link[0] = NULL;
-	        else s->link[0] = p->link[1];
-	      p->link[1] = s;
-	      p->rtag = PLUS;
-	      if (p->bal == -1)	s->bal = +1, r->bal = 0;
-	        else if (p->bal == 0) s->bal = r->bal = 0;
-		  else s->bal = 0, r->bal = -1;
-	      p->bal = 0;
-	      if (a[k - 1] == 1)
-		pa[k - 1]->rtag = PLUS;
-	      pa[k - 1]->link[(int) a[k - 1]] = p;
-	  }
-      }
-  }
-  return G;
+  ninodes--;
 }
 
 /////////////////////////////////////////////////////////////////////////////
 
-static void avltr_init(void)
+static void chained_hash_init(void)
 {
-  int i;
-  avltr_node *G;
-
-  CollectTree.root.link[0] = NULL;
-  CollectTree.root.link[1] = &CollectTree.root;
-  CollectTree.root.rtag = PLUS;
-  CollectTree.count = 0;
   Traverser.init = 0;
   Traverser.p = NULL;
 
-  G = TNodePoolPtr;
-  for (i=0; i<(NODES_IN_POOL-1); i++) {
-	ulist_add(&G->list, &TNodePool);
-	G++;
-  }
-
-  g_printf("avltr_init\n");
+  g_printf("chained_hash_init\n");
   ninodes = 0;
 }
 
-void avltr_destroy(void)
+static void chained_hash_destroy(void)
 {
-  avltr_tree *tree;
+  int i;
 #if PROFILE >= 2
   hitimer_t t0 = 0;
 #endif
 
-  tree = &CollectTree;
   e_printf("--------------------------------------------------------------\n");
-  e_printf("Destroy AVLtree with %d nodes\n",ninodes);
+  e_printf("Destroy hash chain with %d nodes\n",ninodes);
   e_printf("--------------------------------------------------------------\n");
 #ifdef DEBUG_TREE
   DumpTree (tLog);
@@ -579,43 +191,22 @@ void avltr_destroy(void)
 #endif
 
   mprot_end();
-  if (tree->root.link[0] != &tree->root) {
-      avltr_node *an[AVL_MAX_HEIGHT];	/* Stack A: nodes. */
-      char ab[AVL_MAX_HEIGHT];		/* Stack A: bits. */
-      int ap = 0;			/* Stack A: height. */
-      avltr_node *p = tree->root.link[0];
 
-      for (;;) {
-	  while (p != NULL) {
-	      ab[ap] = 0;
-	      an[ap++] = p;
-	      p = p->link[0];
-	  }
-
-	  for (;;) {
-	      backref *B;
-	      if (ap == 0) goto quit;
-
-	      p = an[--ap];
-	      if (ab[ap] == 0) {
-		  ab[ap++] = 1;
-		  if (p->rtag == MINUS) continue;
-		  p = p->link[1];
-		  break;
-	      }
-	      B = p->data->bkr;
+  for (i = 0; i <= FINDTREE_CACHE_HASH_MASK; i++) {
+      TNode *G = findtree_cache[i];
+      while (G) {
+	      TNode *G2 = G;
+	      backref *B = G->bkr;
 	      while (B) {
 		  backref *B2 = B;
 		  B = B->next;
 		  free(B2);
 	      }
-	      FreeGenCodeBuf(p->data->addr);
-	      free(p->data);
-	      p->data = NULL;
-	  }
+	      FreeGenCodeBuf(G->addr);
+	      G = G->next;
+	      free(G2);
       }
   }
-quit:;
 #if PROFILE
   if (debug_level('e')) {
     TreeCleanups++;
@@ -904,9 +495,10 @@ static void checklink(const TNode *G, const linkdesc *L, char branch)
 		*p);
 	    const backref *B = GL->bkr;
 	    assert(B); // bad backref if NULL
-	    int n = 0;
+	    int n = 0, m = 0;
 	    int brt = 0;
 	    while (B) {
+	      m++;
 		if (B->ref==G) {
 		    n++;
 		    brt += B->branch;
@@ -914,12 +506,13 @@ static void checklink(const TNode *G, const linkdesc *L, char branch)
 		}
 		B = B->next;
 	    }
+	    //if (m > 20) dbug_printf("%d\n", m);
 	    if (n < 1 || n > 2 || (n == 2 && brt != 'N' + 'T')) {
 		error("0 or >1 backrefs1 (%i)\n", n); goto nquit;
 	    }
   }
   else {
-	    if (*p!=0xb9) {
+	    if (*p!=0xb8) {
 		error("bad %c link jmp\n", branch); goto nquit;
 	    }
   }
@@ -930,17 +523,17 @@ nquit:
 
 static void CheckLinks(void)
 {
-  avltr_node *p = &CollectTree.root;
+  TNode *p = NULL;
   TNode *G;
 
   for (;;) {
     /* walk to next node */
     p = NEXTNODE(p);
-    if (p == &CollectTree.root) {
+    if (p == NULL) {
 	e_printf("DEBUG: node link check ok\n");
 	return;
     }
-    G = p->data;
+    G = p;
     if (debug_level('e')>5) e_printf("Node %p at %08x\n",G,G->key);
     checklink(G, &G->clink_t, 'T');
     checklink(G, &G->clink_nt, 'N');
@@ -954,7 +547,7 @@ static void CheckLinks(void)
 
 static void DumpTree (FILE *fd)
 {
-  avltr_node *p = &CollectTree.root;
+  TNode *p = NULL;
   TNode *G;
   linkdesc *L;
   backref *B;
@@ -967,17 +560,16 @@ static void DumpTree (FILE *fd)
   while (nn < 10000) {		// sorry,only 4 digits available
     /* walk to next node */
     p = NEXTNODE(p);
-    if (p == &CollectTree.root) {
+    if (p == NULL) {
 	fprintf(fd,"\n== EOT ====================================================\n");
 	fflush(fd);
 	return;
     }
     fprintf(fd,"\n-----------------------------------------------------------\n");
-    G = p->data;
+    G = p;
     fprintf(fd,"%04d Node %p at %08x..%08x addr=%p flags=%#x\n",
 	nn,G,G->key,(G->key+G->seqlen-1),G->addr,G->flags);
-    fprintf(fd,"     AVL (%p:%p),%d,%d,%d,%d\n",p->link[0],p->link[1],
-		p->bal,p->cache,p->pad,p->rtag);
+    fprintf(fd,"     CHAIN (%p)\n",G->next);
     fprintf(fd,"     source:     instr=%d, len=%#x\n",G->seqnum,G->seqlen);
     fprintf(fd,"     translated: len=%#x\n",G->len);
     L = &G->clink_t;
@@ -1035,8 +627,7 @@ static void DumpTree (FILE *fd)
 static int TraverseAndClean(void)
 {
   int cnt = 0;
-  avltr_node *p;
-  TNode *G;
+  TNode *p, *G;
 #if PROFILE >= 2
   hitimer_t t0 = 0;
 
@@ -1044,7 +635,7 @@ static int TraverseAndClean(void)
 #endif
 
   if (Traverser.init == 0) {
-      Traverser.p = p = &CollectTree.root;
+      Traverser.p = p = NULL;
       Traverser.init = 1;
   }
   else
@@ -1052,13 +643,13 @@ static int TraverseAndClean(void)
 
   /* walk to next node */
   p = NEXTNODE(p);
-  if (p == &CollectTree.root) {
+  if (p == NULL) {
       p = NEXTNODE(p);
-      if (p == &CollectTree.root)
+      if (p == NULL)
           return 0;
   }
 
-  G = p->data;
+  G = p;
   G->alive -= AGENODE;
   if (G->alive <= 0) {
       if (debug_level('e')>2) e_printf("TraverseAndClean: node at %08x decayed, delete\n",G->key);
@@ -1086,14 +677,12 @@ void Move2Tree(TNode *nG)
   hitimer_t t0 = 0;
   if (debug_level('e')) t0 = GETTSC();
 #endif
-  TNode **found;
 
   nG->alive = NODELIFE(G);
   pthread_mutex_lock_trees();
-  found = avltr_probe(nG);
+  chained_hash_insert(nG);
   /* since existing code was invalidated in DoClose(),
-     we must find a new node */
-  assert(*found == nG);
+     we must have a new node */
 #if !defined(SINGLESTEP)&&!defined(SINGLEBLOCK)
   if (debug_level('e')>2) {
 		e_printf("New TNode %d at=%p key=%08x\n",
@@ -1110,8 +699,6 @@ void Move2Tree(TNode *nG)
   CheckLinks();
 #endif
   pthread_mutex_unlock_trees();
-  __atomic_store_n(&findtree_cache[nG->key&FINDTREE_CACHE_HASH_MASK], nG,
-		   __ATOMIC_RELAXED);
 #if PROFILE >= 2
   if (debug_level('e')) AddTime += (GETTSC() - t0);
 #endif
@@ -1122,53 +709,38 @@ void tree_gc(void)
   int i;
 
   if (ninodes > NodeLimit) {
+dbug_printf("tac\n");
 	for (i=0; i<CreationIndex; i++) TraverseAndClean();
   }
 }
 
-static avltr_node *_avltr_find(int key)
+static TNode *chained_hash_find(int key)
 {
-  avltr_node *I;
-  I = CollectTree.root.link[0];
-  if (I == NULL) return NULL;	/* always NULL the first time! */
-
-  for (;;) {
-      int diff = (key - I->data->key);
-
-      if (diff < 0) {
-	  I = I->link[0];
-	  if (I == NULL) return NULL;
-      }
-      else if (diff > 0) {
-	  if (I->rtag == MINUS) return NULL;
-	  I = I->link[1];
-      }
-      else break;
+  int hash = key & FINDTREE_CACHE_HASH_MASK;
+  TNode *I, *G, *head = findtree_cache[hash];
+  for (I = head; I; I = G) {
+    G = I->next;
+    if (G && G->key == key) {
+      I->next = G->next;
+      G->next = head;
+      findtree_cache[hash] = G;
+      return G;
+    }
   }
   return I;
 }
 
-static TNode **avltr_find(int key)
-{
-  avltr_node *I = _avltr_find(key);
-  if (!I)
-    return NULL;
-  return &I->data;
-}
-
 static TNode *FindTree_tail(int key)
 {
-  TNode **I;
   TNode *G;
 #if PROFILE >= 2
   hitimer_t t0 = 0;
   if (debug_level('e')) t0 = GETTSC();
 #endif
 
-  I = avltr_find(key);
-  if (I) {
-	G = *I;
-	assert(G && G->addr);
+  G = chained_hash_find(key);
+  if (G) {
+	assert(G->addr);
 	if (debug_level('e')>3) e_printf("Found key %08x\n",key);
 	G->alive = NODELIFE(G);
 #if PROFILE
@@ -1208,7 +780,9 @@ TNode *FindTree(int key)
      ~99.99% success rate */
   I = __atomic_load_n(&findtree_cache[key&FINDTREE_CACHE_HASH_MASK],
 		      __ATOMIC_RELAXED);
-  if (I && (I->key==key)) {
+  if (!I)
+	return I;
+  if (I->key==key) {
 	if (debug_level('e')) {
 	    if (debug_level('e')>4)
 		e_printf("Found key %08x via cache\n", key);
@@ -1219,16 +793,10 @@ TNode *FindTree(int key)
 	I->alive = NODELIFE(I);
 	return I;
   }
-  if (!e_querymark(key, 1))
-	return NULL;
 
   pthread_mutex_lock_trees();
   I = FindTree_tail(key);
   pthread_mutex_unlock_trees();
-  if (I) {
-	__atomic_store_n(&findtree_cache[key&FINDTREE_CACHE_HASH_MASK], I,
-			 __ATOMIC_RELAXED);
-  }
   return I;
 }
 
@@ -1252,8 +820,6 @@ TNode *FindTree_unlocked(int key)
   }
 
   I = FindTree_tail(key);
-  if (I)
-	findtree_cache[key&FINDTREE_CACHE_HASH_MASK] = I;
   return I;
 }
 
@@ -1307,10 +873,7 @@ static void RemoveNode_unlocked(TNode *G)
   e_unmarkpage(G->key, G->seqlen);
   NodeUnlinker(G);
   assert(!G->bkr && !G->clink_t.ref && !G->clink_nt.ref && G->addr);
-  __atomic_store_n(&findtree_cache[G->key&FINDTREE_CACHE_HASH_MASK],
-		   NULL, __ATOMIC_RELAXED);
-  TNode *deleted = avltr_delete(G->key);
-  assert(deleted == G);
+  chained_hash_delete(G);
   free(G);
 }
 
@@ -1591,14 +1154,9 @@ void CollectStat (void)
 void InitTrees(void)
 {
 	g_printf("InitTrees\n");
-	TNodePoolPtr = calloc(NODES_IN_POOL, sizeof(avltr_node));
 
-	avltr_init();
+	chained_hash_init();
 
-	if (debug_level('e')>1) {
-	    e_printf("Root tree node at %p\n",&CollectTree.root);
-	    e_printf("TNode pool at %p\n",TNodePoolPtr);
-	}
 	NodesParsed = NodesExecd = 0;
 	CleanFreq = 8;
 	cstx = xCS1 = 0;
@@ -1619,8 +1177,7 @@ void EndGen(void)
 	int i;
 	int csm = config.CPUSpeedInMhz*1000;
 #endif
-	avltr_destroy();
-	free(TNodePoolPtr); TNodePoolPtr=NULL;
+	chained_hash_destroy();
 #ifdef SHOW_STAT
 	for (i=0; i<cstx; i++) {
 	    dbug_printf("%04d %16Ld %8d %8d(%3d) %8d %d\n",i,(xCST[i].a/csm),
