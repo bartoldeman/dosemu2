@@ -175,6 +175,7 @@
 #define MRETISP	0x00020000
 #define MREALA	0x00040000
 #define MBIGCS	0x00080000
+#define MINVALID (MBIGCS|MREALA)
 
 #define CKSIGN	0x00100000	// check signal: for jumps
 #define MNOREG  0x00200000

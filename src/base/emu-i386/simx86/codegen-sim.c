@@ -2785,7 +2785,7 @@ static unsigned Exec_sim(void *SeqStart)
 	P0 = Gen_sim(SeqStart, &TheCPU.mem_ref);
 	currentIG = NULL;
 	EFLAGS = (EFLAGS & ~EFLAGS_CC) | FlagSync_All();
-	if (TheCPU.err && TheCPU.err != EXCP_BREAKNODE) TheCPU.key = P0;
+	if (TheCPU.err) TheCPU.key = P0;
 
 	return P0;
 }
