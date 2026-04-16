@@ -837,7 +837,8 @@ int X_init(void)
     X_printf("X: X_init: mouse grabbing disabled\n");
   }
 
-  X_register_speaker(display);
+  if (config.speaker == SPKR_EMULATED)
+    X_register_speaker(display);
 
   pthread_create(&event_thr, NULL, X_handle_events, NULL);
 #if defined(HAVE_PTHREAD_SETNAME_NP) && defined(__GLIBC__)
@@ -869,10 +870,12 @@ void X_close(void)
   remapper_done();
 
 #if CONFIG_X_SPEAKER
-  /* turn off the sound, and */
-  speaker_off();
-  /* reset the speaker to it's default */
-  register_speaker(NULL, NULL, NULL);
+  if (config.speaker == SPKR_EMULATED) {
+    /* turn off the sound, and */
+    speaker_off();
+    /* reset the speaker to it's default */
+    register_speaker(NULL, NULL, NULL);
+  }
 #endif
 
 #ifdef HAVE_XVIDMODE

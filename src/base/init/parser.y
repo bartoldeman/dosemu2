@@ -243,7 +243,7 @@ enum {
 %token DOSEMUMAP MAPPINGDRIVER
 %token LFN_SUPPORT FFS_REDIR SET_INT_HOOKS TRACE_IRETS FINT_REVECT
 	/* speaker */
-%token EMULATED NATIVE
+%token GENERATED EMULATED NATIVE
 	/* cpuemu/dpmi */
 %token CPUEMU CPU_VM CPU_VM_DPMI VM86 KVM REMOTE
 	/* keyboard */
@@ -1868,9 +1868,10 @@ irq_bool:	expression {
 speaker		: L_OFF		{ $$ = SPKR_OFF; }
 		| NATIVE	{ $$ = SPKR_NATIVE; }
 		| EMULATED	{ $$ = SPKR_EMULATED; }
-		| STRING        { yyerror("got '%s', expected 'emulated' or 'native'", $1);
+		| GENERATED	{ $$ = SPKR_GENERATED; }
+		| STRING        { yyerror("got '%s', expected 'generated', 'emulated' or 'native'", $1);
 				  free($1); }
-		| error         { yyerror("expected 'emulated' or 'native'"); }
+		| error         { yyerror("expected 'generated', 'emulated' or 'native'"); }
 		;
 
 cpu_vm		: L_AUTO	{ $$ = -1; }

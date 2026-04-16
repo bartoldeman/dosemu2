@@ -374,6 +374,7 @@ ems_conv_pages		RETURN(EMS_CONV_PAGES);
 
 	/* speaker values */
 
+generated		RETURN(GENERATED);
 emulated		RETURN(EMULATED);
 native			RETURN(NATIVE);
 
